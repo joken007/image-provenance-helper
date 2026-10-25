@@ -219,6 +219,28 @@ image-provenance-helper/
 
 ---
 
+## 六·补、启用 GitHub Actions CI
+
+仓库里**不含** `.github/workflows/ci.yml`。原因是 GitHub 规定：写入工作流文件需要令牌具备 `workflow` scope，
+而发布此仓库所用的令牌只授予了 `contents:write`（最小权限原则，不多给）。
+
+需要 CI 的话，二选一：
+
+**方式 A（推荐）**：给令牌加权限
+1. 打开 <https://github.com/settings/personal-access-tokens>，编辑你的令牌
+2. Repository permissions → 选中目标仓库 → Permissions → 勾选 **Workflows: Read and write**
+3. 把 `.github/workflows/ci.yml` 复制回仓库并提交
+
+**方式 B**：不用令牌，在网页端直接创建
+1. 打开仓库的 `Actions` 页 → `New workflow` → `New workflow` → 自定义
+2. 粘贴 `ci.yml` 内容（仓库根目录当前无此文件，可从本地项目目录复制）
+3. 工作流内容：Node 20/22 矩阵 → `npm ci` → 校验 `vendor/` 产物 SHA-512 完整性 → `npm test` → 全部 JS 语法检查
+
+CI 会做三件事：校验 vendor 产物的 SHA-512（SRI）与 `vendor/c2pa.sri.txt` 一致（防止 WASM 被替换）、
+跑 34 项单测、对全部 JS 做 `node --check` 语法检查。
+
+---
+
 ## 七、能力边界（红线）
 
 插件**不做**这些事，且不会有隐藏开关：
