@@ -19,3 +19,4 @@ test/e2e-card.png
 .env
 .env.local
 .git-credentials
+gcm-diagnose.log
