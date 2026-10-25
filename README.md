@@ -4,6 +4,22 @@
 >
 > **它不做真假宣判。** 插件负责把散落在各处的证据聚合成一张可核对的卡片，最终定性永远由人来做。
 
+## 效果预览
+
+**取证全自动完成** —— 后台跑完 6 个引擎、自动解析结果、自动反查 Wayback 时间锚点，检索页面全程不可见且跑完即关。下图是反搜结束后的真实侧栏状态：
+
+<img src="docs/screenshot-sidepanel.png" alt="全自动反搜完成后的侧栏：SauceNAO 命中 8 条、提取 5 个站点、Wayback 锚定 2015-05-15，结论自动判为「旧图挪用」" width="420">
+
+可以看到三个关键点：
+
+- 「反向搜图」顶部绿条：**自动检索已完成 · 所有临时页面均已关闭**
+- 「时间锚点」：命中站点最早被 Wayback 收录于 **2015-05-15**
+- 「证据信号」：**确定性 1 条**，结论条自动判为 **「旧图挪用」**
+
+生成的辟谣长图（2160px 宽，双遍排版自适应高度，无截断）：
+
+<img src="docs/sample-card-2160w.png" alt="导出的辟谣长图成品，2160px 宽" width="360">
+
 ---
 
 ## 一、快速开始
@@ -269,7 +285,8 @@ E2E 测试会真实启动 Chromium 并加载扩展，覆盖：
 - 双遍排版 Canvas 渲染（2160px 宽、高度自适应不截断）→ PNG 导出
 
 > E2E 需要 Chromium：`npx playwright install chromium`
-> 测试产物：`test/e2e-auto.png`（全自动反搜后的侧栏）、`test/e2e-panel.png`、`test/e2e-card.png`（辟谣长图）
+> E2E 每次运行会把截图与成品图写到 `test/` 下（`e2e-auto.png` / `e2e-panel.png` / `e2e-card.png`），
+> 这些是运行产物、不入库。仓库里的 `docs/` 是归档的展示图，供 README 引用。
 
 ---
 
@@ -280,6 +297,7 @@ image-provenance-helper/
 ├─ manifest.json
 ├─ package.json
 ├─ assets/                    # 三档图标
+├─ docs/                      # README 展示图（侧栏截图 / 成品长图）
 ├─ background/                # Service Worker 侧
 │  ├─ service-worker.js       #   主控编排 + 消息路由 + Wayback 增强
 │  ├─ pick-image.js           #   三级取图 + 防盗链判定
