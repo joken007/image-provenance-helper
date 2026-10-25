@@ -21,7 +21,3 @@ test/e2e-auto.png
 .env.local
 .git-credentials
 gcm-diagnose.log
-
-# GitHub Actions 工作流：需 workflow scope 才能入库，暂存于本地
-# 需要启用 CI 时请见 README「六·补」一节
-.github/
