@@ -263,7 +263,9 @@ ReferenceError: FileReaderSync is not defined
 
 ```bash
 npm test                  # 34 项纯函数单测（Node 内置 test runner）
+npm run verify:vendor     # vendor 产物完整性校验（WASM SHA-512 三方比对）
 node test/e2e-smoke.mjs   # 32 项浏览器端真实冒烟测试（Playwright）
+node test/e2e-auto.mjs    # 15 项全自动反搜专项（Playwright）
 ```
 
 E2E 测试会真实启动 Chromium 并加载扩展，覆盖：
@@ -338,8 +340,29 @@ image-provenance-helper/
 | :--- | :--- |
 | Node 矩阵 | **20 与 22 双版本并行** |
 | `npm ci` | 干净安装，`postinstall` 自动执行 `scripts/vendor.mjs` 拉取 exifr 与 C2PA WASM |
+| `npm run verify:vendor` | **校验 vendor 产物完整性**：四个文件齐全非空 → WASM 的 SHA-512 与 `vendor/c2pa.sri.txt` 比对 → `c2pa.wasm.js` 内嵌 `WASM_SRI` 常量与二进制、SRI 记录三方比对 |
 | `npm test` | 34 项纯函数单测 |
 | 语法检查 | 对 `background` / `content` / `lib` / `sidepanel` / `options` 全部 JS 执行 `node --check` |
+
+### vendor 完整性校验为什么值得单独一步
+
+`vendor/` 里的 exifr 与 C2PA WASM 是「构建产物入库」，一旦被人手动改动或 npm 包被替换，
+插件会在用户端**静默出错**（WASM 加载失败、EXIF 解析异常），排查成本极高。
+
+校验逻辑抽在 `scripts/verify-vendor.mjs`，本地也能跑：
+
+```bash
+npm run verify:vendor
+```
+
+它不是走过场——实测把 `c2pa_bg.wasm` 改动 1 个字节，脚本立即报 2 项失败并以退出码 1 结束：
+
+```
+[2/3] WASM SHA-512 与 c2pa.sri.txt 比对
+  ❌ WASM 实际哈希与 c2pa.sri.txt 不一致，文件可能被替换或损坏
+[3/3] c2pa.wasm.js 内嵌 WASM_SRI 常量比对
+  ❌ c2pa.wasm.js 内嵌的 WASM_SRI 与真实 WASM 不一致（绑定层与二进制不匹配）
+```
 
 当前状态：[![CI](https://github.com/joken007/image-provenance-helper/actions/workflows/ci.yml/badge.svg)](https://github.com/joken007/image-provenance-helper/actions/workflows/ci.yml)
 
