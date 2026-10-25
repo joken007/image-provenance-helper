@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>图片溯源与辟谣助手 · 设置</title>
+  <link rel="stylesheet" href="panel.css" />
+  <style>
+    body { padding: 24px; background: #f8fafc; }
+    .wrap { max-width: 720px; margin: 0 auto; }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    .sub { color: #64748b; font-size: 13px; margin-bottom: 20px; }
+    .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px; margin-bottom: 14px; }
+    .card h2 { font-size: 14px; margin: 0 0 10px; }
+    .hint { font-size: 12px; color: #64748b; margin-top: 4px; line-height: 1.6; }
+    .field { display: block; margin-bottom: 12px; }
+    .field > span { display: block; font-size: 12px; color: #475569; margin-bottom: 4px; font-weight: 600; }
+    .field input, .field select { width: 100%; padding: 7px 9px; border: 1px solid #e2e8f0; border-radius: 6px; font-family: inherit; font-size: 13px; }
+    .row { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+    .primary-btn { background: #1e293b; color: #fff; border-radius: 6px; padding: 8px 16px; font-size: 13px; cursor: pointer; border: none; }
+    .primary-btn:hover { filter: brightness(1.25); }
+    .ghost-btn { background: #fff; color: #0f172a; border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px 14px; font-size: 13px; cursor: pointer; }
+    .engines { display: flex; flex-wrap: wrap; gap: 6px; }
+    .engines label { display: flex; align-items: center; gap: 5px; border: 1px solid #e2e8f0; border-radius: 999px; padding: 4px 11px; font-size: 12px; cursor: pointer; }
+    .ok { color: #15803d; font-size: 12px; }
+    .err { color: #dc2626; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>图片溯源与辟谣助手 · 设置</h1>
+    <div class="sub">所有配置保存在本机浏览器（chrome.storage.local），不会上传到任何服务器。</div>
+
+    <div class="card">
+      <h2>LLM 接口（两段式辟谣生成）</h2>
+      <div class="field">
+        <span>接口地址</span>
+        <input id="llmBaseUrl" type="text" placeholder="https://api.example.com/v1" />
+        <div class="hint">填到 <code>/v1</code> 即可，插件会自动补全 <code>/chat/completions</code>。支持 OpenAI 兼容的中转接口。</div>
+      </div>
+      <div class="field">
+        <span>API Key</span>
+        <input id="llmApiKey" type="password" placeholder="sk-..." />
+      </div>
+      <div class="field">
+        <span>视觉模型</span>
+        <input id="llmVisionModel" type="text" placeholder="例如 gpt-4o / qwen-vl-max / doubao-vision" />
+        <div class="hint">用于第一段「提取画面客观事实」。必须支持图片输入。</div>
+      </div>
+      <div class="field">
+        <span>文本模型</span>
+        <input id="llmTextModel" type="text" placeholder="例如 gpt-4o-mini / qwen-max" />
+        <div class="hint">用于第二段「生成受控辟谣文案」。</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>像素级 AI 检测（仅辅助线索）</h2>
+      <div class="field">
+        <span>检测服务</span>
+        <select id="detectionProvider">
+          <option value="none">不使用（推荐）</option>
+          <option value="sightengine">Sightengine</option>
+          <option value="hive">Hive AI</option>
+        </select>
+        <div class="hint">像素级检测准确率 84%–94%，存在 5%–15% 误报，只能作为倾向性线索，绝不可单独定性。</div>
+      </div>
+      <div class="field">
+        <span>API Key</span>
+        <input id="sightengineApiKey" type="password" placeholder="（按所选服务填写）" />
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>反搜引擎</h2>
+      <div class="engines" id="engine-checks"></div>
+      <div class="row">
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;">
+          <input id="autoOpenEngines" type="checkbox" checked />
+          核查时自动打开各引擎标签页（关闭后需手动点开）
+        </label>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>其它</h2>
+      <div class="field">
+        <span>辟谣图右下角水印</span>
+        <input id="watermark" type="text" placeholder="@图片溯源核查笔记" />
+      </div>
+    </div>
+
+    <div class="row">
+      <button id="btn-save" class="primary-btn">保存设置</button>
+      <button id="btn-test-c2pa" class="ghost-btn">自检 C2PA 验签模块</button>
+      <span id="tip"></span>
+    </div>
+  </div>
+  <script type="module" src="options.js"></script>
+</body>
+</html>

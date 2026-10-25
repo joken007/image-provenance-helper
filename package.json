@@ -1,0 +1,17 @@
+{
+  "name": "image-provenance-helper",
+  "version": "1.0.0",
+  "private": true,
+  "description": "图片溯源与辟谣助手 —— Chrome/Edge Manifest V3 事实核查与辟谣图文工作台",
+  "type": "module",
+  "scripts": {
+    "vendor": "node scripts/vendor.mjs",
+    "postinstall": "node scripts/vendor.mjs",
+    "test": "node --test test/*.test.mjs",
+    "icons": "python scripts/make_icons.py"
+  },
+  "dependencies": {
+    "@contentauth/c2pa-wasm": "^0.4.4",
+    "exifr": "^7.1.3"
+  }
+}

@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>图片溯源与辟谣工作台</title>
+  <link rel="stylesheet" href="panel.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <img src="../assets/icon-48.png" alt="" width="24" height="24" />
+      <span>图片溯源与辟谣助手</span>
+    </div>
+    <div class="topbar-actions">
+      <button id="btn-options" class="icon-btn" title="配置 LLM 与检测服务">⚙</button>
+      <button id="btn-history" class="icon-btn" title="历史核查记录">🕘</button>
+    </div>
+  </header>
+
+  <main id="main">
+    <!-- 空状态 -->
+    <section id="empty-state" class="empty">
+      <div class="empty-icon">🔍</div>
+      <h2>右键点击任意图片即可开始核查</h2>
+      <p>在任意网页上右键一张图片，选择「使用『辟谣助手』核查此图片」，本侧栏会自动展开并开始取证。</p>
+      <ul class="empty-tips">
+        <li>支持微信、微博、小红书、X 等平台的防盗链图片</li>
+        <li>自动提取 EXIF、PNG 生成参数与 C2PA 内容凭证</li>
+        <li>五路并发取证：反搜 / 元数据 / 凭证 / 时间线 / AI 检测</li>
+      </ul>
+      <div class="empty-actions">
+        <button id="btn-drop" class="primary-btn">手动拖入图片核查</button>
+      </div>
+      <input id="file-input" type="file" accept="image/*" hidden />
+    </section>
+
+    <!-- 核查中 -->
+    <section id="loading-state" class="loading hidden">
+      <div class="spinner"></div>
+      <h2 id="loading-title">正在取证…</h2>
+      <ul id="loading-steps" class="steps"></ul>
+    </section>
+
+    <!-- 证据卡 -->
+    <section id="result-state" class="result hidden">
+      <!-- 结论条 -->
+      <div id="verdict-banner" class="verdict-banner">
+        <div class="verdict-left">
+          <span class="verdict-label">系统倾向</span>
+          <strong id="verdict-text">无法判断</strong>
+        </div>
+        <div id="verdict-reason" class="verdict-reason"></div>
+      </div>
+
+      <!-- 原图 -->
+      <div class="card">
+        <div class="card-head">
+          <h3>核查对象</h3>
+          <span id="image-dims" class="muted"></span>
+        </div>
+        <div class="thumb-row">
+          <img id="thumb" class="thumb" alt="待核查图片" />
+          <div class="thumb-meta">
+            <div id="image-site" class="mono"></div>
+            <a id="image-link" class="link" target="_blank" rel="noreferrer noopener">打开原图链接 ↗</a>
+            <div id="image-notes" class="muted small"></div>
+            <div id="cdn-note" class="note"></div>
+          </div>
+        </div>
+        <div id="clipboard-banner" class="clip-banner hidden">
+          ✅ 高清原图已复制到剪贴板！切换到任意搜图标签页直接按 <kbd>Ctrl</kbd>+<kbd>V</kbd> 即可上传检索
+        </div>
+        <div class="row">
+          <button id="btn-copy-clipboard" class="ghost-btn">复制原图到剪贴板</button>
+          <button id="btn-verify-c2pa" class="ghost-btn">C2PA 验签</button>
+          <a id="btn-c2pa-online" class="ghost-btn" target="_blank" rel="noreferrer noopener">在线验证</a>
+        </div>
+      </div>
+
+      <!-- 反向搜图 -->
+      <div class="card">
+        <div class="card-head">
+          <h3>反向搜图</h3>
+          <span id="engine-mode" class="muted small"></span>
+        </div>
+        <div id="engine-list" class="engine-list"></div>
+      </div>
+
+      <!-- 元数据 -->
+      <div class="card">
+        <div class="card-head"><h3>元数据与 AIGC 特征</h3></div>
+        <div id="exif-list" class="kv-list"></div>
+      </div>
+
+      <!-- 内容凭证 -->
+      <div class="card">
+        <div class="card-head"><h3>C2PA 内容凭证</h3></div>
+        <div id="c2pa-box" class="kv-list"></div>
+      </div>
+
+      <!-- 时间线 -->
+      <div class="card">
+        <div class="card-head"><h3>时间线（Wayback Machine）</h3></div>
+        <div id="timeline-box" class="kv-list"></div>
+      </div>
+
+      <!-- 信号 -->
+      <div class="card">
+        <div class="card-head">
+          <h3>证据信号</h3>
+          <span id="signal-count" class="muted small"></span>
+        </div>
+        <div id="signal-list" class="signal-list"></div>
+      </div>
+
+      <!-- 人工裁定 -->
+      <div class="card">
+        <div class="card-head"><h3>人工裁定</h3></div>
+        <label class="field">
+          <span>待核查的网传说法</span>
+          <textarea id="claim-text" rows="2" placeholder="把网传原文抄在这里，AI 撰稿时会以此为准"></textarea>
+        </label>
+        <div class="verdict-options" id="verdict-options"></div>
+        <label class="field">
+          <span>备注（写给文案生成器看的补充说明）</span>
+          <textarea id="manual-notes" rows="2" placeholder="例如：截图时间与网传时间相差 3 天"></textarea>
+        </label>
+        <div class="row">
+          <button id="btn-save-manual" class="primary-btn">保存裁定</button>
+          <span id="save-manual-tip" class="muted small"></span>
+        </div>
+      </div>
+
+      <!-- AI 生成与导出 -->
+      <div class="card">
+        <div class="card-head">
+          <h3>辟谣图文生成</h3>
+          <span id="ai-status" class="muted small"></span>
+        </div>
+
+        <!-- 闸门 A -->
+        <div class="gate" id="gate-a">
+          <div class="gate-head"><span class="gate-badge">闸门 A</span>核对画面事实</div>
+          <div id="facts-box" class="facts-box">
+            <p class="muted">尚未提取画面事实。点击下方按钮调用视觉模型提取。</p>
+          </div>
+          <div class="row">
+            <button id="btn-extract-facts" class="ghost-btn">提取画面事实</button>
+            <button id="btn-confirm-facts" class="primary-btn" disabled>确认事实无误</button>
+          </div>
+        </div>
+
+        <!-- 闸门 B -->
+        <div class="gate" id="gate-b">
+          <div class="gate-head"><span class="gate-badge">闸门 B</span>逐句编辑文案</div>
+          <div id="draft-box" class="draft-box">
+            <p class="muted">需先通过闸门 A。</p>
+          </div>
+          <div id="blocked-sources" class="blocked hidden"></div>
+          <div class="row">
+            <button id="btn-generate-draft" class="ghost-btn" disabled>生成文案</button>
+            <button id="btn-confirm-draft" class="primary-btn" disabled>确认文案</button>
+          </div>
+        </div>
+
+        <!-- 闸门 C -->
+        <div class="gate" id="gate-c">
+          <div class="gate-head"><span class="gate-badge">闸门 C</span>预览并导出</div>
+          <div class="preview-wrap">
+            <canvas id="card-canvas"></canvas>
+            <div id="preview-empty" class="preview-empty">通过闸门 B 后点击「刷新预览」查看成品图</div>
+          </div>
+          <div class="row">
+            <button id="btn-render" class="ghost-btn" disabled>刷新预览</button>
+            <button id="btn-download" class="primary-btn" disabled>下载 2160px 高清 PNG</button>
+            <span id="export-tip" class="muted small"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 历史 -->
+      <div class="card" id="history-card">
+        <div class="card-head"><h3>历史核查记录</h3></div>
+        <div id="history-list" class="history-list"></div>
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="panel.js"></script>
+</body>
+</html>
