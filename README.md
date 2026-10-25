@@ -1,5 +1,9 @@
 # 图片溯源与辟谣助手 · 图片溯源与事实核查工作台
 
+[![CI](https://github.com/joken007/image-provenance-helper/actions/workflows/ci.yml/badge.svg)](https://github.com/joken007/image-provenance-helper/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Chrome 116+](https://img.shields.io/badge/Chrome-116%2B-4285F4)
+
 > Chrome / Edge (Manifest V3) 单人自用扩展。聚合多引擎反向搜图、EXIF 与 PNG 生成参数扫描、C2PA 内容凭证 WASM 验签、Wayback 归档时间线，输出结构化「证据卡」，并可生成受控的辟谣长图。
 >
 > **它不做真假宣判。** 插件负责把散落在各处的证据聚合成一张可核对的卡片，最终定性永远由人来做。
@@ -326,25 +330,35 @@ image-provenance-helper/
 
 ---
 
-## 六·补、启用 GitHub Actions CI
+## 六·补、GitHub Actions CI
 
-仓库里**不含** `.github/workflows/ci.yml`。原因是 GitHub 规定：写入工作流文件需要令牌具备 `workflow` scope，
-而发布此仓库所用的令牌只授予了 `contents:write`（最小权限原则，不多给）。
+已在 `.github/workflows/ci.yml` 配置并跑通。每次 push / PR 到 `main` 时自动执行：
 
-需要 CI 的话，二选一：
+| 步骤 | 内容 |
+| :--- | :--- |
+| Node 矩阵 | **20 与 22 双版本并行** |
+| `npm ci` | 干净安装，`postinstall` 自动执行 `scripts/vendor.mjs` 拉取 exifr 与 C2PA WASM |
+| `npm test` | 34 项纯函数单测 |
+| 语法检查 | 对 `background` / `content` / `lib` / `sidepanel` / `options` 全部 JS 执行 `node --check` |
 
-**方式 A（推荐）**：给令牌加权限
-1. 打开 <https://github.com/settings/personal-access-tokens>，编辑你的令牌
-2. Repository permissions → 选中目标仓库 → Permissions → 勾选 **Workflows: Read and write**
-3. 把 `.github/workflows/ci.yml` 复制回仓库并提交
+当前状态：[![CI](https://github.com/joken007/image-provenance-helper/actions/workflows/ci.yml/badge.svg)](https://github.com/joken007/image-provenance-helper/actions/workflows/ci.yml)
 
-**方式 B**：不用令牌，在网页端直接创建
-1. 打开仓库的 `Actions` 页 → `New workflow` → `New workflow` → 自定义
-2. 粘贴 `ci.yml` 内容（仓库根目录当前无此文件，可从本地项目目录复制）
-3. 工作流内容：Node 20/22 矩阵 → `npm ci` → 校验 `vendor/` 产物 SHA-512 完整性 → `npm test` → 全部 JS 语法检查
+> 这一步的实际意义：它证明了**别人 clone 下来能跑通**——
+> `npm ci` 在干净的 Ubuntu 上能正确生成 `vendor/`，单测与语法检查都过。
+> 不是"我本机能跑"而已。
 
-CI 会做三件事：校验 vendor 产物的 SHA-512（SRI）与 `vendor/c2pa.sri.txt` 一致（防止 WASM 被替换）、
-跑 34 项单测、对全部 JS 做 `node --check` 语法检查。
+### 一个踩过的坑：workflow scope
+
+GitHub 规定写入 `.github/workflows/**` 需要令牌具备 `workflow` scope。
+细粒度 PAT 即便给了 `Contents: Read and write`，`git push` 与 Contents API 依然会被拒：
+
+```
+refusing to allow a Personal Access Token to create or update workflow
+`.github/workflows/ci.yml` without `workflow` scope
+```
+
+**绕法**：在网页端 `Add file → Create new file` 手动创建（走浏览器登录会话，不受令牌 scope 限制），
+之后普通代码提交就不会再被拦——因为只要不改动 workflow 文件本身，push 不需要 `workflow` scope。
 
 ---
 
