@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [20, 22]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 使用 Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: 安装依赖（postinstall 自动执行 vendor 脚本）
+        run: npm ci
+
+      - name: 单元测试
+        run: npm test
+
+      - name: 语法检查
+        run: |
+          for f in $(find background content lib sidepanel options -name "*.js"); do
+            node --check "$f" || exit 1
+          done
+          echo "全部 JS 文件语法检查通过"
