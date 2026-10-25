@@ -25,6 +25,9 @@ jobs:
       - name: 安装依赖（postinstall 自动执行 vendor 脚本）
         run: npm ci
 
+      - name: 校验 vendor 产物完整性（WASM SHA-512）
+        run: npm run verify:vendor
+
       - name: 单元测试
         run: npm test
 
