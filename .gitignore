@@ -11,6 +11,7 @@ Thumbs.db
 # 测试产物（E2E 每次运行都会重生成）
 test/e2e-panel.png
 test/e2e-card.png
+test/e2e-auto.png
 
 # 打包产物
 *.zip

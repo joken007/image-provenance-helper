@@ -138,20 +138,68 @@ export function evaluateSignals(inv) {
     });
   }
 
-  // ---------- 4. 反向搜图人工补录的最早出处信号 ----------
+  // ---------- 4. 反向搜图结果信号 ----------
+  //
+  // 【自动结果的分级规则 —— 自动化不等于放松严谨】
+  //   强信号：多引擎交叉印证（≥2 个引擎都有命中）且拿到具体日期
+  //   强信号：单引擎命中 ≥3 个不同站点 + 拿到日期（说明已广泛转载且时间明确）
+  //   弱信号：只有站点命中、无日期（能证明"网上广泛存在"，但证明不了"谁更早"）
+  //   弱信号：单引擎单薄命中
+  //   人工确认过的（verifiedByUser）一律强信号
+  const reverseHits = (inv.engines || []).filter(
+    (e) => (e.matchCount || 0) > 0 || e.earliestSeenUrl || e.earliestSeenDate
+  );
+  const enginesWithDate = reverseHits.filter((e) => e.earliestSeenDate);
+
   for (const eng of inv.engines || []) {
-    if (eng.earliestSeenUrl && eng.earliestSeenDate) {
-      signals.push({
-        id: `sig_rev_${eng.id}`,
-        layer: 'reverse',
-        strength: 'strong',
-        direction: 'supports-fake',
-        text: `通过 ${eng.name} 检索到该图早在 ${eng.earliestSeenDate} 已出现在公开网页（${
-          eng.earliestSeenContext || '早期记录'
-        }）。`,
-        sourceUrl: eng.earliestSeenUrl,
-      });
-    }
+    const hasDate = Boolean(eng.earliestSeenDate);
+    const hasUrl = Boolean(eng.earliestSeenUrl);
+    if (!hasDate && !hasUrl) continue;
+
+    const hostCount = (eng.distinctHosts || []).length || eng.matchCount || 0;
+    const crossEngine = enginesWithDate.length >= 2;
+
+    const isStrong =
+      eng.verifiedByUser === true ||
+      // Wayback 独立第三方时间锚点：可信度高于引擎自报日期
+      (eng.archiveVerified === true && hasDate) ||
+      (hasDate && crossEngine) ||
+      (hasDate && hostCount >= 3) ||
+      // 人工回填（无 autoVerified 标记）沿用旧规则的强信号
+      (!eng.autoVerified && hasDate && hasUrl);
+
+    const scopePart = hostCount
+      ? `已在 ${hostCount} 个${eng.distinctHosts?.length ? '不同站点' : '结果'}被发现`
+      : '被检索到';
+
+    signals.push({
+      id: `sig_rev_${eng.id}`,
+      layer: 'reverse',
+      strength: isStrong ? 'strong' : 'weak',
+      direction: isStrong ? 'supports-fake' : 'neutral',
+      text: hasDate
+        ? eng.archiveVerified
+          ? `通过 ${eng.name} 命中该图，并经 Wayback Machine 确认其出处页面最早收录于 ${eng.earliestSeenDate}。`
+          : `通过 ${eng.name} 检索到该图早在 ${eng.earliestSeenDate} 已出现在公开网页（${scopePart}）。`
+        : `通过 ${eng.name} 检索到 ${hostCount || '若干'} 条相同/相似图片，但未能确定最早发布时间，需结合其它引擎或人工核实。`,
+      detail: eng.autoNote || undefined,
+      sourceUrl: eng.earliestSeenUrl || undefined,
+    });
+  }
+
+  // 多引擎交叉命中本身也是一条独立信号（即使都没拿到日期）
+  if (reverseHits.length >= 2) {
+    const hostUnion = new Set();
+    for (const e of reverseHits) for (const h of e.distinctHosts || []) hostUnion.add(h);
+    signals.push({
+      id: 'sig_rev_cross',
+      layer: 'reverse',
+      strength: hostUnion.size >= 3 ? 'weak' : 'unknown',
+      direction: hostUnion.size >= 3 ? 'supports-fake' : 'neutral',
+      text: `${reverseHits.length} 个独立引擎均检索到该图的相同或相似版本，累计涉及 ${
+        hostUnion.size || '若干'
+      } 个站点，说明该图在网上已广泛流传。广泛流传本身不代表造假，需结合时间线判断谁更早。`,
+    });
   }
 
   // ---------- 5. Wayback 时间线信号 ----------

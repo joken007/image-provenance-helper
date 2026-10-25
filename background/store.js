@@ -125,8 +125,10 @@ export function defaultOptions() {
     // 像素级 AI 检测
     sightengineApiKey: '',
     detectionProvider: 'none', // none | sightengine | hive
-    // 反搜引擎启用清单
-    enabledEngines: ['google-lens', 'tineye', 'yandex', 'bing', 'baidu', 'saucenao'],
+    // 全自动反搜：启用哪些引擎（按实测可靠性排序）
+    autoEngines: ['saucenao', 'tineye', 'bing', 'baidu', 'yandex', 'google-lens'],
+    // 兼容旧字段
+    enabledEngines: ['saucenao', 'tineye', 'bing', 'baidu', 'yandex', 'google-lens'],
     // 其它
     watermark: '@图片溯源核查笔记',
     autoOpenEngines: true,

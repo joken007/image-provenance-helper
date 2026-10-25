@@ -107,10 +107,10 @@ function render() {
 function renderLoading(inv) {
   const steps = [
     { key: 'image', label: '抓取原图与还原大图地址', done: Boolean(inv.image?.sha256) },
-    { key: 'reverse', label: '开启多引擎反向搜图', done: (inv.engines || []).length > 0 },
     { key: 'meta', label: '解析 EXIF 与 PNG 生成参数', done: inv.status === 'ready' },
-    { key: 'c2pa', label: '扫描 C2PA 内容凭证', done: inv.status === 'ready' },
+    { key: 'c2pa', label: '扫描并验签 C2PA 内容凭证', done: inv.status === 'ready' },
     { key: 'timeline', label: '查询 Wayback 归档时间线', done: inv.status === 'ready' },
+    { key: 'reverse', label: '自动反搜（后台进行，页面不可见）', done: false },
   ];
   $('loading-steps').innerHTML = steps
     .map((s) => `<li class="${s.done ? 'done' : 'doing'}">${s.label}</li>`)
@@ -149,8 +149,10 @@ function renderImage(inv) {
   $('cdn-note').classList.toggle('hidden', !img.cdnNote);
 
   // 防盗链提示
-  const needsClipboard = !img.canDirectLink;
-  $('clipboard-banner').classList.toggle('hidden', !needsClipboard);
+  // 全自动模式下不再需要「复制到剪贴板 + Ctrl+V」——
+  // 图片字节直接由后台注入引擎的上传框，防盗链图片同样能全自动检索。
+  // 剪贴板横幅默认隐藏，仅在用户主动点「复制原图」后才出现确认提示。
+  $('clipboard-banner').classList.add('hidden');
 
   // 缩略图
   if (img.sha256) {
@@ -167,47 +169,111 @@ function renderImage(inv) {
 
 function renderEngines(inv) {
   const list = inv.engines || [];
-  const anyClipboard = list.some((e) => e.mode === 'clipboard-paste');
-  $('engine-mode').textContent = anyClipboard
-    ? '当前图片受防盗链保护，走「复制到剪贴板 + 引擎页 Ctrl+V」模式'
-    : '公网直链模式，已并发打开各引擎检索页';
+  const av = inv.autoVerify || {};
+  const done = list.filter((e) => e.autoStatus === 'ok').length;
+  const running = list.filter((e) => e.autoStatus === 'running' || e.autoStatus === 'queued').length;
 
-  $('engine-list').innerHTML = list
-    .map((e) => {
-      const statusText = {
-        opened: '已打开',
-        blocked: '遇验证码',
-        failed: '打开失败',
-        'pending-paste': '待粘贴',
-        pending: '未打开',
-      }[e.status] || e.status;
+  // 顶部状态条
+  let banner = '';
+  if (av.status === 'running' || running > 0) {
+    banner = `<div class="auto-banner running"><span class="spin-dot"></span>正在后台自动检索（${
+      done + (list.length - running)
+    }/${list.length} 已结束）· 检索页面不可见，完成即自动关闭</div>`;
+  } else if (av.status === 'done') {
+    banner = `<div class="auto-banner done">✅ 自动检索已完成 · 所有临时页面均已关闭 · ${done} 个引擎返回结果</div>`;
+  } else if (av.status === 'failed') {
+    banner = `<div class="auto-banner failed">自动检索失败：${escapeHtml(av.note || '')}</div>`;
+  }
 
-      return `
+  $('engine-mode').textContent = av.status === 'done' ? '全自动完成' : '全自动进行中';
+
+  // Wayback 反查结果（自动补充时间锚点）
+  const ap = inv.archiveProbe;
+  let archiveLine = '';
+  if (ap?.earliestFirstSeen) {
+    archiveLine = `<div class="archive-probe">
+      <span class="ap-label">时间锚点</span>
+      命中站点最早被 Wayback 收录于 <b>${escapeHtml(ap.earliestFirstSeen)}</b>
+      （已核 ${ap.checked} 个来源，命中 ${ap.hits} 个）
+      ${
+        ap.snapshotUrl
+          ? `· <a class="link" target="_blank" rel="noreferrer noopener" href="${escapeHtml(ap.snapshotUrl)}">查看快照 ↗</a>`
+          : ''
+      }
+    </div>`;
+  } else if (ap && ap.checked > 0) {
+    archiveLine = `<div class="archive-probe muted">已对 ${ap.checked} 个命中来源反查 Wayback，均未被收录（时间线无法自动确认）</div>`;
+  }
+
+  $('engine-list').innerHTML =
+    banner +
+    archiveLine +
+    list
+      .map((e) => {
+        const st = e.autoStatus || 'queued';
+        const statusText =
+          {
+            ok: '已命中',
+            blocked: '需验证码',
+            timeout: '超时',
+            failed: '失败',
+            queued: '排队中',
+            running: '检索中',
+            skipped: '已跳过',
+          }[st] || st;
+
+        const hosts = e.distinctHosts || [];
+        const meta = [];
+        if (e.matchCount) meta.push(`命中 ${e.matchCount} 条`);
+        if (hosts.length) meta.push(`${hosts.length} 个站点`);
+        if (e.earliestSeenDate) meta.push(`最早 ${e.earliestSeenDate}`);
+        if (e.durationMs) meta.push(`${(e.durationMs / 1000).toFixed(1)}s`);
+
+        return `
       <div class="engine" data-engine="${e.id}">
         <div class="engine-top">
           <span class="engine-name">${escapeHtml(e.name)}</span>
-          <span class="badge ${e.status}">${statusText}</span>
+          <span class="badge auto-${st}">${statusText}</span>
         </div>
-        <div class="engine-focus">${escapeHtml(e.focus || '')}</div>
-        ${e.note ? `<div class="engine-note">${escapeHtml(e.note)}</div>` : ''}
-        <div class="row">
-          <button class="ghost-btn" data-act="open-engine" data-engine="${e.id}">重新打开</button>
-        </div>
-        <div class="engine-early">
-          <div class="muted small">人工回填最早出处（仅你确认过的才算证据）</div>
-          <input type="date" placeholder="最早出现日期" data-field="earliestSeenDate" data-engine="${e.id}" value="${escapeHtml(
-        e.earliestSeenDate || ''
-      )}" />
-          <input type="url" placeholder="最早出处链接（https://…）" data-field="earliestSeenUrl" data-engine="${e.id}" value="${escapeHtml(
-        e.earliestSeenUrl || ''
-      )}" />
-          <input type="text" placeholder="出处语境简述" data-field="earliestSeenContext" data-engine="${e.id}" value="${escapeHtml(
-        e.earliestSeenContext || ''
-      )}" />
-        </div>
+        ${meta.length ? `<div class="engine-metrics">${meta.map((m) => `<span>${escapeHtml(m)}</span>`).join('')}</div>` : ''}
+        ${e.autoNote ? `<div class="engine-note">${escapeHtml(e.autoNote)}</div>` : ''}
+        ${
+          hosts.length
+            ? `<div class="engine-hosts">${hosts
+                .slice(0, 6)
+                .map((h) => `<span class="host-chip">${escapeHtml(h)}</span>`)
+                .join('')}${hosts.length > 6 ? `<span class="muted small">+${hosts.length - 6}</span>` : ''}</div>`
+            : ''
+        }
+        ${
+          e.earliestSeenUrl
+            ? `<div class="engine-early-link"><a class="link" target="_blank" rel="noreferrer noopener" href="${escapeHtml(
+                e.earliestSeenUrl
+              )}">最早线索 ↗</a></div>`
+            : ''
+        }
+        ${
+          st === 'blocked' || st === 'timeout' || st === 'failed'
+            ? `<div class="row"><button class="ghost-btn" data-act="open-engine" data-engine="${e.id}">手动打开一次</button></div>`
+            : ''
+        }
+        <details class="manual-fix">
+          <summary>手动修正（可选）</summary>
+          <div class="engine-early">
+            <input type="date" placeholder="最早出现日期" data-field="earliestSeenDate" data-engine="${e.id}" value="${escapeHtml(
+          e.earliestSeenDate || ''
+        )}" />
+            <input type="url" placeholder="最早出处链接" data-field="earliestSeenUrl" data-engine="${e.id}" value="${escapeHtml(
+          e.earliestSeenUrl || ''
+        )}" />
+            <input type="text" placeholder="出处语境简述" data-field="earliestSeenContext" data-engine="${e.id}" value="${escapeHtml(
+          e.earliestSeenContext || ''
+        )}" />
+          </div>
+        </details>
       </div>`;
-    })
-    .join('');
+      })
+      .join('');
 }
 
 function renderExif(inv) {

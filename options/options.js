@@ -1,6 +1,6 @@
 // options/options.js —— 扩展设置页
 
-import { ENGINES } from '../lib/constants.js';
+import { AUTO_ENGINES } from '../lib/engine-adapters.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -23,8 +23,8 @@ async function load() {
   $('watermark').value = o.watermark || '';
   $('autoOpenEngines').checked = o.autoOpenEngines !== false;
 
-  const enabled = new Set(o.enabledEngines || ENGINES.map((e) => e.id));
-  $('engine-checks').innerHTML = ENGINES.map(
+  const enabled = new Set(o.autoEngines || o.enabledEngines || AUTO_ENGINES.map((e) => e.id));
+  $('engine-checks').innerHTML = AUTO_ENGINES.map(
     (e) =>
       `<label><input type="checkbox" data-engine="${e.id}" ${
         enabled.has(e.id) ? 'checked' : ''
@@ -46,7 +46,8 @@ async function save() {
     sightengineApiKey: $('sightengineApiKey').value.trim(),
     watermark: $('watermark').value.trim(),
     autoOpenEngines: $('autoOpenEngines').checked,
-    enabledEngines,
+    autoEngines: enabledEngines,
+    enabledEngines, // 兼容旧字段
   };
 
   const res = await send({ type: 'inv:save-options', patch });
