@@ -527,3 +527,41 @@ test('检索健康度按检索词统计，不按词×引擎', async () => {
     '仍按「词数×引擎数」计算 attempted，并发下会显示失真数字'
   );
 });
+
+// ---------------- 12. 引擎提交链路（最隐蔽的坑） ----------------
+
+test('探测就绪时绝不能调用页面的一次性开关 isSearchReady', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../background/auto-verify.js', import.meta.url), 'utf8');
+
+  // 剥掉注释，只看真实代码
+  const code = src
+    .split('\n')
+    .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+    .join('\n');
+
+  // probeSubmitReady 与 submitSearchForm 都不许调用 isSearchReady
+  for (const fnName of ['probeSubmitReady', 'submitSearchForm']) {
+    const m = code.match(new RegExp(`function ${fnName}\\s*\\(\\)?[^{]*\\{([\\s\\S]*?)\\n\\}`));
+    if (!m) continue;
+    assert.ok(
+      !/isSearchReady\s*\(/.test(m[1]),
+      `${fnName} 里调用了 isSearchReady()。它是 SauceNAO 的一次性消费开关（读一次就置 false），` +
+        '提前调用会把提交权限消耗掉，导致 onsubmit 守卫返回 false、提交被静默取消。'
+    );
+  }
+});
+
+test('提交前必须确认文件已被引擎接受（无拒绝提示）', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../background/auto-verify.js', import.meta.url), 'utf8');
+  assert.match(src, /rejectHint/, '缺少「引擎拒绝该文件」的识别');
+  assert.match(src, /rejected:\s*true/, '缺少 rejected 状态回传');
+  assert.match(src, /autoStatus:\s*'rejected'/, '缺少 rejected 引擎状态，用户会误以为超时');
+});
+
+test('提交后必须确认真的离开了首页', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../background/auto-verify.js', import.meta.url), 'utf8');
+  assert.match(src, /confirmLeftHome/, '缺少「提交是否生效」的确认，会导致误报为结果超时');
+});

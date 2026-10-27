@@ -102,14 +102,50 @@ async function runOneEngine(engine, bytesBase64, mime) {
       return fail(engine, seeded?.error || '未能找到上传入口', started);
     }
 
-    // 4) 自动提交（部分引擎塞文件后自己会跳，先等一会儿看是否已跳转）
-    await sleep(2200);
-    const urlAfterSeed = await getTabUrl(tabId);
-    if (!urlAfterSeed || sameOrigin(urlAfterSeed, engine.homeUrl)) {
-      await injectSubmit(tabId, engine);
+    // 4) 等「可以提交」再提交
+    //
+    // 【为什么不能塞完就提交】
+    //   引擎的上传框普遍挂着异步校验（SauceNAO: checkImageFile 读文件头），
+    //   校验通过前表单守卫（isSearchReady）返回 false，提交会被静默拦下，
+    //   页面停在首页 —— 表现就是「上传了但永远没有结果」。
+    //   而且实测：塞入瞬间 isSearchReady 仍为 true（校验尚未开始），
+    //   所以必须等「连续多次稳定为 true」，不能取瞬时值。
+    const readyToSubmit = await waitForSubmitReady(tabId, engine.submitReadyTimeoutMs || 15000);
+
+    if (readyToSubmit.rejected) {
+      // 引擎自己判定这个文件不合格 —— 这是明确结论，不该报成"超时"
+      return {
+        id: engine.id,
+        name: engine.name,
+        autoStatus: 'rejected',
+        autoNote: readyToSubmit.note || '引擎拒绝了这个文件',
+        matchCount: 0,
+        durationMs: Date.now() - started,
+      };
     }
 
-    // 5) 轮询等结果就绪
+    await injectSubmit(tabId, engine);
+
+    // 5) 确认真的离开了首页（提交被守卫拦下时 URL 不会变）
+    await sleep(1500);
+    let leftHome = await confirmLeftHome(tabId, engine, 8000);
+    if (!leftHome.ok) {
+      // 再试一次：有些引擎的就绪标志是延时置位的，第二次能过
+      await injectSubmit(tabId, engine);
+      leftHome = await confirmLeftHome(tabId, engine, 6000);
+    }
+    if (!leftHome.ok) {
+      return {
+        id: engine.id,
+        name: engine.name,
+        autoStatus: 'failed',
+        autoNote: `提交未生效（${leftHome.note}）。该引擎可能对图片有最低尺寸或格式要求。`,
+        matchCount: 0,
+        durationMs: Date.now() - started,
+      };
+    }
+
+    // 6) 轮询等结果就绪
     const ready = await waitForResult(tabId, engine);
     if (!ready.ok) {
       return {
@@ -203,6 +239,15 @@ function seedFileInput(b64, mimeType, selector) {
 /**
  * 触发提交：requestSubmit → 点可见按钮 → form.submit 三级兜底
  * 同样必须完全自包含。
+ *
+ * 【绝对不要在提交前调用 isSearchReady()】
+ *   它是 SauceNAO 的一次性消费开关（读一次就置 false）。
+ *   提交动作本身会触发 onsubmit="return(isSearchReady())"，
+ *   那一次调用才是「正当消费」。若我们提前再调一次，
+ *   开关就被我们用掉了，真正提交时守卫只会拿到 false → 提交被取消。
+ *
+ *   所以这里只做「提交」，不做「就绪判断」——就绪判断交给 probeSubmitReady，
+ *   而后者只看文件与错误提示，不碰 isSearchReady。
  */
 function submitSearchForm(strategy) {
   const input = document.querySelector('input[type=file]');
@@ -232,6 +277,66 @@ function submitSearchForm(strategy) {
     return 'submit';
   }
   return 'none';
+}
+
+/**
+ * 探测页面是否「可以提交了」
+ * 必须完全自包含。
+ *
+ * 【绝对禁止调用页面的 isSearchReady() 来探测】
+ *   SauceNAO 的实现是：
+ *     function isSearchReady() {
+ *       if (searchReady) { searchReady = false; return true; }   // ← 读一次就置 false
+ *       ...return false;
+ *     }
+ *   它是个【一次性消费开关】，不是纯查询函数。
+ *   如果轮询里反复调用它来「探测是否就绪」，第一次调用就把开关消耗掉了，
+ *   等到真正提交时 onsubmit 再调用它只会拿到 false —— 提交被静默取消。
+ *   这就是「注入成功但永远停在首页」的根因，而且是探测动作自己造成的。
+ *
+ * 【正确做法：只看不会改变状态的外部信号】
+ *   1. 文件框里有文件、且体积正常
+ *   2. 预览区没有错误提示（Image Too Large / Image Type Not Supported）
+ *   3. 搜索按钮被加上激活类名（这是 checkImageFile 成功后的副作用，纯读取）
+ */
+function probeSubmitReady() {
+  const input = document.querySelector('input[type=file]');
+  const hasFile = Boolean(input && input.files && input.files.length > 0);
+  const fileSize = hasFile ? input.files[0].size : 0;
+
+  // 预览区的错误提示（checkImageFile 失败时会写入这里）
+  let rejectHint = '';
+  try {
+    const preview = document.getElementById('imagePreview') || document.querySelector('.preview, #preview');
+    const t = (preview?.innerText || '').trim();
+    if (/too large|not supported|too small|invalid/i.test(t)) rejectHint = t.slice(0, 80);
+  } catch {
+    /* ignore */
+  }
+
+  // 搜索按钮是否被激活（纯读取，不改变状态）
+  let buttonActive = null;
+  try {
+    const btn = document.getElementById('searchButton') || document.querySelector('input[type=submit]');
+    if (btn) {
+      const cls = btn.className || '';
+      // SauceNAO 成功后会 remove("searchButtonActive") 的反面：先加后减？
+      // 实测成功路径是 showImageFile() 激活按钮，这里用「是否 disabled」更通用
+      buttonActive = !btn.disabled;
+    }
+  } catch {
+    /* ignore */
+  }
+
+  return {
+    hasFile,
+    fileSize,
+    rejectHint,
+    buttonActive,
+    // 只依据「有文件 + 无错误提示」判定，绝不碰 isSearchReady
+    readyNow: hasFile && fileSize > 0 && !rejectHint,
+    url: location.href,
+  };
 }
 
 /**
@@ -439,15 +544,91 @@ async function injectUpload(tabId, engine, bytesBase64, mime) {
 async function injectSubmit(tabId, engine) {
   if (engine.submitStrategy === 'none') return;
   try {
-    await chrome.scripting.executeScript({
+    const res = await chrome.scripting.executeScript({
       target: { tabId },
       world: 'MAIN',
       func: submitSearchForm,
       args: [engine.submitStrategy || 'auto'],
     });
+    return res?.[0]?.result;
   } catch {
-    /* 提交失败交给后续轮询判定超时 */
+    return null;
   }
+}
+
+/**
+ * 等「文件已就位且未被拒绝」
+ *
+ * 【为什么只需短暂等待，不再长时间轮询】
+ *   探测本身虽不碰 isSearchReady，但长时间轮询没有意义：
+ *   checkImageFile 是同步执行的（塞文件时 dispatch change 就立即跑完），
+ *   它成功会立刻激活搜索按钮、失败会立刻写入错误提示。
+ *   所以塞完文件后等 1~2 秒确认状态即可，不需要几十秒轮询。
+ *
+ *   若确认被拒绝（体积/类型不合格），立刻返回 rejected 并说明原因 ——
+ *   让用户知道是「这张图引擎不收」，而不是笼统的「超时」。
+ */
+async function waitForSubmitReady(tabId, timeoutMs) {
+  const deadline = Date.now() + Math.min(timeoutMs, 6000);
+  let last = null;
+
+  while (Date.now() < deadline) {
+    let probe;
+    try {
+      const res = await chrome.scripting.executeScript({
+        target: { tabId },
+        world: 'MAIN',
+        func: probeSubmitReady,
+        args: [],
+      });
+      probe = res?.[0]?.result;
+    } catch {
+      probe = null;
+    }
+
+    if (probe) {
+      last = probe;
+
+      // 页面明确拒绝了这个文件 —— 立即失败，别白等
+      if (probe.rejectHint) {
+        return {
+          ok: false,
+          probe,
+          rejected: true,
+          note: `引擎拒绝了这个文件：${probe.rejectHint}`,
+        };
+      }
+
+      if (probe.readyNow) {
+        return { ok: true, probe };
+      }
+    }
+
+    await sleep(400);
+  }
+
+  return { ok: false, probe: last, note: '文件未被引擎接受' };
+}
+
+/**
+ * 确认提交真的生效了（离开了首页）
+ *
+ * 【为什么必须单独确认】
+ *   提交被表单守卫拦下时，页面不会报错，URL 也不会变 —— 只是「什么都没发生」。
+ *   如果不确认就继续等结果，会一直等到超时，最后报「结果页等待超时」，
+ *   而真实原因是「提交根本没发出去」，诊断完全跑偏。
+ */
+async function confirmLeftHome(tabId, engine, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const url = await getTabUrl(tabId);
+    if (url && !sameOrigin(url, engine.homeUrl)) {
+      return { ok: true, url };
+    }
+    await sleep(500);
+  }
+  const finalUrl = await getTabUrl(tabId);
+  return { ok: false, note: `仍停在 ${finalUrl || '首页'}` };
 }
 
 async function injectParse(tabId, engine) {

@@ -901,6 +901,8 @@ async function handleManualDrop(file) {
     inv.image.width = dims.width;
     inv.image.height = dims.height;
     inv.image.notes = '用户手动上传的图片';
+    // 手动上传同样要有取图自检 —— 用户也需要确认「送进引擎的是我拖进来的那张」
+    inv.image.acquisition = describeAcquisition(inv.image, bytesBase64);
 
     const [exif, c2paQuick] = await Promise.all([
       readMetadata(bytesBase64),

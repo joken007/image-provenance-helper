@@ -401,10 +401,12 @@ ReferenceError: FileReaderSync is not defined
 ## 五、测试
 
 ```bash
-npm test                  # 67 项纯函数单测（Node 内置 test runner）
+npm test                  # 79 项纯函数单测（Node 内置 test runner）
 npm run verify:vendor     # vendor 产物完整性校验（WASM SHA-512 三方比对）
-node test/e2e-smoke.mjs   # 32 项浏览器端真实冒烟测试（Playwright）
-node test/e2e-auto.mjs    # 15 项全自动反搜专项（Playwright）
+node test/e2e-smoke.mjs        # 32 项浏览器端真实冒烟测试（Playwright）
+node test/e2e-auto.mjs         # 15 项全自动反搜专项（Playwright）
+node test/e2e-image-target.mjs # 8 项取图正确性专项（防「搜错图」）
+node test/e2e-engine-flow.mjs  # 引擎提交链路专项（防「上传了但没结果」）
 ```
 
 单测覆盖的新增部分（`test/text-factcheck.test.mjs`）：
