@@ -437,3 +437,47 @@ test('右键菜单已给出 srcUrl 时，不得被页面探测结果覆盖', asy
   assert.match(src, /if \(ctxSrc\)/, '取图目标未对「右键项」与「探测项」做优先级区分');
   assert.match(src, /已按右键项为准/, '缺少两者不一致时的处理与提示');
 });
+
+// ---------------- 10. 检索可靠性与总结质量 ----------------
+
+test('检索必须并发而非串行（避免 SW 回收掐断长链路）', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../background/web-search.js', import.meta.url), 'utf8');
+  assert.match(src, /MAX_PARALLEL_TABS/, '缺少并发上限常量');
+  assert.match(src, /Promise\.all/, '检索仍是串行，长链路会被 SW 回收掐断');
+});
+
+test('跳转必须先装监听再 update，避免解析到上一个检索词的结果页', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../background/web-search.js', import.meta.url), 'utf8');
+  // 找到 navigateAndWait 函数体
+  const fn = src.match(/async function navigateAndWait[\s\S]*?\n\}/);
+  assert.ok(fn, '未找到 navigateAndWait');
+  const body = fn[0];
+  const listenAt = body.indexOf('onUpdated.addListener');
+  const updateAt = body.indexOf('tabs\n      .update') >= 0 ? body.indexOf('tabs\n      .update') : body.indexOf('.update(');
+  assert.ok(listenAt > 0 && updateAt > 0, '未找到监听或跳转调用');
+  assert.ok(listenAt < updateAt, '监听必须在跳转之前注册，否则会漏掉加载完成事件');
+});
+
+test('检索全失败必须给出诊断，不能混同为「未检索到相关来源」', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../background/text-factcheck.js', import.meta.url), 'utf8');
+  assert.match(src, /allSearchFailed/, '未区分「检索失败」与「确实没有来源」');
+  assert.match(src, /不代表这条内容查无此事/, '缺少面向用户的澄清文案');
+});
+
+test('核查报告必须包含具体总结字段', async () => {
+  const { emptyTextReport } = await import('../lib/prompts.js');
+  const base = emptyTextReport();
+  for (const key of ['keyFindings', 'keyNumbers', 'whatsMissing']) {
+    assert.ok(key in base, `报告结构缺少 ${key}，总结会过于单薄`);
+  }
+});
+
+test('总结提示词禁止套话并要求写清正确说法', async () => {
+  const { TEXT_SUMMARY_SYSTEM_PROMPT } = await import('../lib/prompts.js');
+  assert.match(TEXT_SUMMARY_SYSTEM_PROMPT, /禁止空话/, '缺少禁止套话的约束');
+  assert.match(TEXT_SUMMARY_SYSTEM_PROMPT, /正确的说法是什么/, '缺少「写出正确说法」的要求');
+  assert.match(TEXT_SUMMARY_SYSTEM_PROMPT, /keyNumbers/, '缺少数字核对字段');
+});

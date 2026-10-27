@@ -182,6 +182,37 @@ export async function runTextFactCheck(postContext, onProgress = () => {}) {
 
     const allSources = [...fcSources, ...searchSources];
 
+    /**
+     * 【检索可用性诊断】
+     *
+     * 「一个来源都没检索到」有两种完全不同的原因，必须区分开：
+     *   a) 搜索引擎全部失败（网络不通 / 被风控 / 选择器失效）
+     *      → 这是插件的问题，不是"这件事没证据"，用户需要知道并去修配置
+     *   b) 搜索引擎正常，但确实没有相关来源
+     *      → 这才是真正的「未检索到相关来源」
+     *
+     * 原实现把两者混为一谈，用户看到"未检索到"会误以为"这条消息查无此事"，
+     * 而实际上可能只是必应挂了。这是很危险的信息误导。
+     */
+    const searchFailed = (gathered.failures || []).filter((f) => f.engine !== '-');
+    const engineCount = (options.searchEngines || []).length || 1;
+    const attempted = plan.queries.length * engineCount;
+    const allSearchFailed = searchSources.length === 0 && searchFailed.length > 0;
+
+    state.searchHealth = {
+      attempted,
+      failed: searchFailed.length,
+      succeeded: attempted - searchFailed.length,
+      allFailed: allSearchFailed,
+      // 全部失败时给出可操作的提示，而不是笼统的「未检索到」
+      diagnosis: allSearchFailed
+        ? '所有搜索引擎都没能返回结果，这属于检索环节失败，不代表这条内容查无此事。' +
+          '常见原因：网络无法访问必应/DuckDuckGo、被风控拦截、或搜索引擎改版。' +
+          '可在设置页切换搜索引擎后重试。'
+        : '',
+      failures: searchFailed.slice(0, 8),
+    };
+
     // ---- 来源分组：区分「独立佐证」与「同源转载」----
     const groups = groupByOrigin(allSources);
     state.sources = allSources;

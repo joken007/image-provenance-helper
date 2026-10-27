@@ -342,10 +342,28 @@ function normalizeTextReport(raw) {
           reasoning: str(c.reasoning),
         }))
     : [];
+
+  // 数字/时间核对项：只接受三种 match 状态，其它一律归为 not-found
+  const keyNumbers = Array.isArray(r.keyNumbers)
+    ? r.keyNumbers
+        .filter((k) => k && (k.claim || k.source))
+        .slice(0, 10)
+        .map((k) => ({
+          claim: str(k.claim),
+          source: str(k.source),
+          match: ['match', 'mismatch', 'not-found'].includes(str(k.match))
+            ? str(k.match)
+            : 'not-found',
+        }))
+    : [];
+
   return {
     verdict: valid.includes(str(r.verdict)) ? str(r.verdict) : base.verdict,
     headline: str(r.headline),
     summary: str(r.summary),
+    keyFindings: arr(r.keyFindings).slice(0, 6),
+    keyNumbers,
+    whatsMissing: arr(r.whatsMissing).slice(0, 6),
     process: arr(r.process),
     claimResults,
     sources,

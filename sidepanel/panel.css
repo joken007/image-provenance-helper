@@ -1151,3 +1151,86 @@ button:disabled {
   font-size: 12px;
   line-height: 1.6;
 }
+
+/* ---------- 核查总结 ---------- */
+
+.sum-block {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line);
+}
+
+.sum-head {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--brand);
+  margin-bottom: 8px;
+}
+
+.sum-list {
+  margin: 0;
+  padding-left: 18px;
+  line-height: 1.75;
+}
+
+.sum-list li {
+  margin-bottom: 5px;
+}
+
+.sum-missing li {
+  color: var(--weak);
+}
+
+.sum-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.sum-table th,
+.sum-table td {
+  border: 1px solid var(--line);
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: top;
+  line-height: 1.6;
+}
+
+.sum-table th {
+  background: #f8fafc;
+  color: var(--muted);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.sum-table td:first-child {
+  width: 32%;
+  font-weight: 600;
+}
+
+.sum-table td:nth-child(2) {
+  width: 44%;
+}
+
+.match-tag {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.match-match {
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+
+.match-mismatch {
+  background: var(--strong-bg);
+  color: var(--strong);
+}
+
+.match-not-found {
+  background: #f1f5f9;
+  color: var(--muted);
+}

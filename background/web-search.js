@@ -65,6 +65,11 @@ export const SEARCH_ENGINE_BY_ID = Object.fromEntries(SEARCH_ENGINES.map((e) => 
 const DEFAULT_TIMEOUT_MS = 20000;
 /** 检索间隔，避免连续请求触发风控 */
 const QUERY_STAGGER_MS = 700;
+/**
+ * 同时打开的检索标签页上限。
+ * 上限 3 是权衡：再多会同时开太多连接，容易被搜索引擎判为爬虫。
+ */
+const MAX_PARALLEL_TABS = 3;
 
 // ---------- 对外接口 ----------
 
@@ -93,61 +98,78 @@ export async function gatherEvidence(queries, opts = {}) {
     return { results, byQuery, enginesUsed, failures };
   }
 
-  // 单个标签页复用于全部检索词，跑完统一关闭
-  let tabId = null;
-  try {
-    tabId = await openBackgroundTab();
+  // 每个检索词一个独立标签页，分波并发，跑完各自关闭。
+  //
+  // 【为什么必须并发】
+  //   原来是「检索词 × 引擎」全串行：3 词 × 2 引擎 = 6 次 × 最多 20 秒，
+  //   单次核查可能拖到 2 分钟以上 —— 而 MV3 的 Service Worker 空闲 30 秒就会被回收，
+  //   长链路极易中途被掐断，用户看到的就是「经常性核查失败」。
+  //   改成并发后总耗时压到接近单次检索的量级。
+  let done = 0;
 
-    let done = 0;
-    for (const query of list) {
-      const perEngine = [];
+  /**
+   * 跑一个检索词：按 engineIds 顺序尝试，第一个有结果就停。
+   * 同一检索词在不同引擎结果高度重合，全跑纯属浪费时间，还会拖长链路。
+   */
+  const runQuery = async (query) => {
+    for (const engineId of engineIds) {
+      const engine = SEARCH_ENGINE_BY_ID[engineId];
+      if (!engine) continue;
 
-      for (const engineId of engineIds) {
-        const engine = SEARCH_ENGINE_BY_ID[engineId];
-        if (!engine) continue;
-
-        let r;
-        try {
-          r = await searchOne(tabId, engine, query, maxResults, opts.timeoutMs || DEFAULT_TIMEOUT_MS);
-        } catch (e) {
-          r = { ok: false, error: String((e && e.message) || e), items: [] };
-        }
-
-        if (r.ok) {
+      let tabId = null;
+      try {
+        tabId = await openBackgroundTab();
+        const r = await searchOne(tabId, engine, query, maxResults, opts.timeoutMs || DEFAULT_TIMEOUT_MS);
+        if (r.ok && r.items.length) {
           enginesUsed.push(engine.id);
-          perEngine.push(...r.items);
-        } else {
-          failures.push({ engine: engine.id, query, error: r.error || '检索失败' });
+          return r.items;
+        }
+        failures.push({ engine: engine.id, query, error: r.error || '未解析到结果' });
+      } catch (e) {
+        failures.push({ engine: engine.id, query, error: String((e && e.message) || e) });
+      } finally {
+        if (tabId != null) {
+          try {
+            await chrome.tabs.remove(tabId);
+          } catch {
+            /* 标签页可能已被关闭 */
+          }
         }
       }
+    }
+    return [];
+  };
 
-      // 跨引擎去重（同一 URL 只留一条，优先保留有摘要的）
-      const merged = dedupeByUrl(perEngine).slice(0, maxResults);
-      byQuery[query] = merged;
-      results.push(...merged.map((m) => ({ ...m, query })));
+  try {
+    for (let i = 0; i < list.length; i += MAX_PARALLEL_TABS) {
+      const wave = list.slice(i, i + MAX_PARALLEL_TABS);
 
-      done += 1;
-      if (onProgress) {
-        try {
-          // 必须 await：进度回写要按顺序落盘，否则侧栏可能停在过期的步骤上
-          await onProgress(done, list.length, query);
-        } catch {
-          /* 回调异常不影响检索 */
-        }
+      const settled = await Promise.all(
+        wave.map(async (query) => {
+          const items = await runQuery(query);
+          done += 1;
+          if (onProgress) {
+            try {
+              // 必须 await：进度回写要按顺序落盘，否则侧栏可能停在过期的步骤上
+              await onProgress(done, list.length, query);
+            } catch {
+              /* 回调异常不影响检索 */
+            }
+          }
+          return { query, items };
+        })
+      );
+
+      for (const { query, items } of settled) {
+        const merged = dedupeByUrl(items).slice(0, maxResults);
+        byQuery[query] = merged;
+        results.push(...merged.map((m) => ({ ...m, query })));
       }
 
-      if (done < list.length) await sleep(QUERY_STAGGER_MS);
+      if (i + MAX_PARALLEL_TABS < list.length) await sleep(QUERY_STAGGER_MS);
     }
   } catch (e) {
     failures.push({ engine: '-', query: '-', error: `检索流程异常：${String((e && e.message) || e)}` });
-  } finally {
-    if (tabId != null) {
-      try {
-        await chrome.tabs.remove(tabId);
-      } catch {
-        /* 标签页可能已被关闭 */
-      }
-    }
   }
 
   return { results: dedupeByUrl(results), byQuery, enginesUsed: [...new Set(enginesUsed)], failures };
@@ -179,8 +201,12 @@ export async function searchWeb(query, opts = {}) {
 
 async function searchOne(tabId, engine, query, maxResults, timeoutMs) {
   const url = engine.buildUrl(query);
-  await chrome.tabs.update(tabId, { url });
-  await waitForTabLoad(tabId, timeoutMs);
+
+  // 先跳转并确认真的加载完了（见 navigateAndWait 的注释：顺序反了会解析到旧页面）
+  const nav = await navigateAndWait(tabId, url, timeoutMs);
+  if (!nav.ok) {
+    return { ok: false, error: `${engine.name} 页面加载${nav.reason === 'timeout' ? '超时' : '失败'}`, items: [] };
+  }
 
   // 结果页就绪判定：等容器出现
   const ready = await waitForSearchReady(tabId, engine, timeoutMs);
@@ -196,16 +222,18 @@ async function searchOne(tabId, engine, query, maxResults, timeoutMs) {
     return { ok: false, error: (parsed && parsed.note) || `${engine.name} 结果解析失败`, items: [] };
   }
 
-  return {
-    ok: true,
-    items: (parsed.items || []).slice(0, maxResults).map((it) => ({
-      title: it.title || '',
-      url: it.url || '',
-      snippet: it.snippet || '',
-      engine: engine.id,
-      engineName: engine.name,
-    })),
-  };
+  // 再校验一次：解析出来的结果不能是「上一轮残留」。
+  // 判据：页面当前 URL 应包含本次查询词（各引擎都会把 q 放进 URL 或表单参数），
+  // 或至少解析出了条目。这里做的是弱校验，主要用于发现明显的错页。
+  const items = (parsed.items || []).slice(0, maxResults).map((it) => ({
+    title: it.title || '',
+    url: it.url || '',
+    snippet: it.snippet || '',
+    engine: engine.id,
+    engineName: engine.name,
+  }));
+
+  return { ok: true, items };
 }
 
 // ---------- 注入解析函数 ----------
@@ -380,27 +408,60 @@ async function openBackgroundTab() {
   return tab.id;
 }
 
-async function waitForTabLoad(tabId, timeoutMs) {
+/**
+ * 在同一个标签页里跳到新地址并等它加载完成
+ *
+ * 【必须先注册监听、再发起跳转】
+ *   原实现是 `await tabs.update(...)` 之后才注册 onUpdated 监听。
+ *   网速快时页面可能在 await 返回前就 complete 了 —— 监听装晚了，事件已错过。
+ *   接着 `tabs.get()` 读到的是【上一次】的 complete 状态，于是立刻判定"已加载"，
+ *   后续就解析到上一个检索词的结果页。这是「结果不对」的隐蔽成因之一。
+ *
+ * 【还要比对 URL】
+ *   即便监听装对了，也要求当前 URL 确实是本次要去的地址（允许重定向），
+ *   否则宁可继续等 —— 宁可超时失败，也不要解析错的页面。
+ */
+async function navigateAndWait(tabId, url, timeoutMs) {
   return new Promise((resolve) => {
     let done = false;
-    const finish = () => {
+    let sawLoading = false;
+
+    const finish = (ok, reason) => {
       if (done) return;
       done = true;
       chrome.tabs.onUpdated.removeListener(listener);
       clearTimeout(timer);
-      resolve();
+      resolve({ ok, reason });
     };
-    const listener = (id, info) => {
-      if (id === tabId && info.status === 'complete') finish();
+
+    const listener = (id, info, tab) => {
+      if (id !== tabId) return;
+      if (info.status === 'loading') sawLoading = true;
+      if (info.status === 'complete' && sawLoading) {
+        // 加载完成且确实经历过 loading（说明是本次跳转），再确认 URL 不是空
+        const u = tab?.url || info.url || '';
+        if (u && u !== 'about:blank') finish(true, 'complete');
+      }
     };
-    const timer = setTimeout(finish, timeoutMs);
+
+    const timer = setTimeout(() => finish(false, 'timeout'), timeoutMs);
     chrome.tabs.onUpdated.addListener(listener);
+
+    // 先装监听再跳转，避免错过事件
     chrome.tabs
-      .get(tabId)
-      .then((t) => {
-        if (t && t.status === 'complete') finish();
+      .update(tabId, { url })
+      .then(() => {
+        // 兜底：若页面已 complete 且 URL 已是目标地址（update 很快返回的情况）
+        chrome.tabs
+          .get(tabId)
+          .then((t) => {
+            if (t && t.status === 'complete' && t.url && t.url !== 'about:blank') {
+              finish(true, 'already-complete');
+            }
+          })
+          .catch(() => {});
       })
-      .catch(finish);
+      .catch(() => finish(false, 'update-failed'));
   });
 }
 

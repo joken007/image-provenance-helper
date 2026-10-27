@@ -248,6 +248,21 @@ function renderTextVerdict(tc) {
 
   const sourceCount = (tc.sources || []).length;
   const groupCount = (tc.groups || []).length;
+  const health = tc.searchHealth || {};
+
+  // 检索全失败时必须显著提示：这不是「查无此事」，是检索坏了
+  const healthWarn = health.allFailed
+    ? `<div class="text-error" style="margin-top:8px">
+         ⚠ 检索环节失败：${escapeHtml(health.diagnosis || '')}
+         ${
+           health.failures && health.failures.length
+             ? `<div class="text-failures" style="margin-top:6px">${health.failures
+                 .map((f) => escapeHtml(`${f.engine}: ${f.error}`))
+                 .join('<br>')}</div>`
+             : ''
+         }
+       </div>`
+    : '';
 
   $('text-verdict-box').innerHTML = `
     <div class="text-verdict">
@@ -258,9 +273,74 @@ function renderTextVerdict(tc) {
       </div>
       <div class="text-verdict-meta">
         拆解 ${results.length} 条断言 · 命中 ${sourceCount} 条来源 · 归为 ${groupCount} 个独立来源组
+        ${health.attempted ? ` · 检索成功 ${health.succeeded}/${health.attempted}` : ''}
       </div>
       ${report.headline ? `<div class="text-headline">${escapeHtml(report.headline)}</div>` : ''}
       ${report.summary ? `<div class="text-summary">${escapeHtml(report.summary)}</div>` : ''}
+      ${healthWarn}
+      ${renderKeyFindings(report)}
+      ${renderKeyNumbers(report)}
+      ${renderWhatsMissing(report)}
+    </div>`;
+}
+
+/**
+ * 关键发现：具体事实，不是评价
+ */
+function renderKeyFindings(report) {
+  const list = report.keyFindings || [];
+  if (!list.length) return '';
+  return `
+    <div class="sum-block">
+      <div class="sum-head">关键发现</div>
+      <ul class="sum-list">${list.map((f) => `<li>${escapeHtml(f)}</li>`).join('')}</ul>
+    </div>`;
+}
+
+/**
+ * 数字 / 时间核对表
+ *
+ * 这是最能让用户一眼判断「到底哪里不对」的部分：
+ * 把正文里的数字与来源里的数字并排列出。
+ */
+function renderKeyNumbers(report) {
+  const list = report.keyNumbers || [];
+  if (!list.length) return '';
+
+  const matchLabel = { match: '一致', mismatch: '不一致', 'not-found': '来源未提及' };
+
+  return `
+    <div class="sum-block">
+      <div class="sum-head">数字与时间核对</div>
+      <table class="sum-table">
+        <thead><tr><th>正文说法</th><th>来源说法</th><th>比对</th></tr></thead>
+        <tbody>
+          ${list
+            .map(
+              (k) => `<tr>
+              <td>${escapeHtml(k.claim || '—')}</td>
+              <td>${escapeHtml(k.source || '—')}</td>
+              <td><span class="match-tag match-${escapeHtml(k.match)}">${escapeHtml(
+                matchLabel[k.match] || k.match
+              )}</span></td>
+            </tr>`
+            )
+            .join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+/**
+ * 还缺什么证据
+ */
+function renderWhatsMissing(report) {
+  const list = report.whatsMissing || [];
+  if (!list.length) return '';
+  return `
+    <div class="sum-block">
+      <div class="sum-head">要让结论更确定，还缺</div>
+      <ul class="sum-list sum-missing">${list.map((m) => `<li>${escapeHtml(m)}</li>`).join('')}</ul>
     </div>`;
 }
 
