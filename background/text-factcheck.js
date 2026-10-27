@@ -79,11 +79,13 @@ export async function runTextFactCheck(postContext, onProgress = () => {}) {
     updatedAt: startedAt,
   };
 
-  const emit = (patch) => {
+  const emit = async (patch) => {
     Object.assign(state, patch);
     state.updatedAt = new Date().toISOString();
     try {
-      onProgress({ ...state });
+      // 必须 await：不 await 的话，回写 storage 会变成竞态，
+      // 进度可能乱序，甚至丢掉最后一次状态（侧栏就会停在某个中间步骤）。
+      await onProgress({ ...state });
     } catch {
       /* 回调异常不影响核查 */
     }
@@ -91,7 +93,21 @@ export async function runTextFactCheck(postContext, onProgress = () => {}) {
 
   try {
     // ---- ① 断言拆解 ----
-    emit({ stage: 'claims', note: '正在拆解可核查断言…' });
+    await emit({ stage: 'claims', note: '正在拆解可核查断言…' });
+
+    // 正文太短就别去烧 LLM 了，直接给出明确原因
+    const text = String(postContext?.text || '').trim();
+    if (text.length < 10) {
+      await emit({
+        status: 'failed',
+        stage: 'failed',
+        note:
+          '没能从页面提取到足够的文字（不足 10 字）。请在页面上框选要核查的那段话后重试，或换一个内容更多的页面。',
+        finishedAt: new Date().toISOString(),
+      });
+      return state;
+    }
+
     const decomposed = await decomposeClaims(postContext);
     const maxClaims = Math.max(1, Math.min(6, options.maxClaims || 6));
     const claims = (decomposed.claims || []).slice(0, maxClaims);
@@ -99,7 +115,7 @@ export async function runTextFactCheck(postContext, onProgress = () => {}) {
     state.unverifiableParts = decomposed.unverifiable || [];
 
     if (!claims.length) {
-      emit({
+      await emit({
         status: 'done',
         stage: 'claims',
         note: '正文里没有可独立核查的断言，无需联网取证',
@@ -111,15 +127,15 @@ export async function runTextFactCheck(postContext, onProgress = () => {}) {
     // ---- ② 组装检索计划 ----
     const plan = buildQueryPlan(claims, options);
     state.queries = plan.queries;
-    emit({ stage: 'search', note: `准备发起 ${plan.queries.length} 组检索…` });
+    await emit({ stage: 'search', note: `准备发起 ${plan.queries.length} 组检索…` });
 
     // ---- ② 联网取证 ----
     const maxPerQuery = Math.max(1, Math.min(20, options.maxSourcesPerQuery || 8));
     const gathered = await gatherEvidence(plan.queries, {
       engineIds: options.searchEngines,
       maxResults: maxPerQuery,
-      onProgress: (done, total, query) => {
-        emit({
+      onProgress: async (done, total, query) => {
+        await emit({
           stage: 'search',
           note: `正在检索（${done}/${total}）：${query}`,
           searchProgress: { done, total, query },
@@ -175,7 +191,7 @@ export async function runTextFactCheck(postContext, onProgress = () => {}) {
     const results = [];
     for (let i = 0; i < claims.length; i++) {
       const claim = claims[i];
-      emit({
+      await emit({
         stage: 'verify',
         note: `正在核查第 ${i + 1}/${claims.length} 条断言：${claim.text.slice(0, 24)}…`,
       });
@@ -248,7 +264,7 @@ export async function runTextFactCheck(postContext, onProgress = () => {}) {
     }
 
     state.results = results;
-    emit({ stage: 'summary', note: '正在汇总核查报告…' });
+    await emit({ stage: 'summary', note: '正在汇总核查报告…' });
 
     // ---- ④ 汇总 ----
     const computedVerdict = aggregateVerdict(results);
@@ -282,7 +298,7 @@ export async function runTextFactCheck(postContext, onProgress = () => {}) {
     state.report = cleaned.report;
     state.blockedSources = blocked;
 
-    emit({
+    await emit({
       status: 'done',
       stage: 'done',
       note: '核查完成',
@@ -292,7 +308,7 @@ export async function runTextFactCheck(postContext, onProgress = () => {}) {
 
     return state;
   } catch (e) {
-    emit({
+    await emit({
       status: 'failed',
       stage: 'failed',
       note: `核查失败：${String((e && e.message) || e)}`,

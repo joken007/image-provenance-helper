@@ -24,8 +24,41 @@ const state = {
 
 // ---------- 初始化 ----------
 
+/**
+ * 长连接保活
+ *
+ * 【为什么必须有】
+ *   MV3 的 Service Worker 空闲 30 秒就会被 Chrome 回收。文本核查要连续跑多次 LLM 调用
+ *   与联网检索，整条链路是 fire-and-forget 的、没有任何锚点。SW 一旦被回收，
+ *   链路就断在中间，状态永远停在「正在拆解可核查断言…」——用户看到的就是「卡住不动」。
+ *
+ *   侧栏打开期间维持一条长连接端口并定期发心跳，Chrome 就会认为 SW 仍在被使用，
+ *   不再回收它。侧栏一关，端口断开，SW 照常按空闲回收，不留后台常驻。
+ */
+let keepAlivePort = null;
+
+function startKeepAlive() {
+  try {
+    keepAlivePort = chrome.runtime.connect({ name: 'keepalive' });
+    keepAlivePort.onDisconnect.addListener(() => {
+      keepAlivePort = null;
+      setTimeout(startKeepAlive, 2000);
+    });
+    setInterval(() => {
+      try {
+        keepAlivePort?.postMessage({ type: 'ping', t: Date.now() });
+      } catch {
+        /* 忽略 */
+      }
+    }, 20000);
+  } catch {
+    setTimeout(startKeepAlive, 3000);
+  }
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   bindStaticEvents();
+  startKeepAlive();
   await loadOptions();
 
   const res = await send({ type: 'inv:get-current' });
@@ -164,20 +197,32 @@ function renderTextCheck(inv) {
   statusEl.textContent = tc.note ? `${statusText} · ${tc.note}` : statusText;
 
   if (tc.status === 'running') {
-    $('text-verdict-box').innerHTML =
-      `<div class="text-progress"><span class="spin-dot"></span>${escapeHtml(tc.note || '正在核查…')}</div>`;
+    // 看门狗：状态长时间没有更新，说明 Service Worker 被回收、链路被掐断了。
+    // 与其让用户对着转圈，不如直接告诉他「中断了，点上面重试」。
+    const stale = isStale(tc.updatedAt || tc.startedAt, 150000);
+    $('text-verdict-box').innerHTML = stale
+      ? `<div class="text-error">核查已中断：${escapeHtml(
+          'Service Worker 被浏览器回收，长任务被掐断（超过 2.5 分钟无进展）。请点上方按钮重试。'
+        )}</div>`
+      : `<div class="text-progress"><span class="spin-dot"></span>${escapeHtml(
+          tc.note || '正在核查…'
+        )}<span class="text-elapsed"></span></div>`;
     $('text-process-box').innerHTML = '';
     // 分析阶段的结果立刻可见：用户能立刻看到「哪些内容需要联网核实」
-    $('text-claims-box').innerHTML = renderTextClaims(tc);
+    // 【注意】renderTextClaims 是副作用函数，直接调用即可，不要拿它的返回值赋给 innerHTML
+    renderTextClaims(tc);
     $('text-sources-box').innerHTML = '';
     $('text-blocked').classList.add('hidden');
+    startElapsedTicker();
     return;
   }
+
+  stopElapsedTicker();
 
   if (tc.status === 'failed') {
     $('text-verdict-box').innerHTML = `<div class="text-error">${escapeHtml(tc.note || '核查失败')}</div>`;
     $('text-process-box').innerHTML = '';
-    $('text-claims-box').innerHTML = renderTextClaims(tc);
+    renderTextClaims(tc);
     $('text-sources-box').innerHTML = '';
     $('text-blocked').classList.add('hidden');
     return;
@@ -285,9 +330,18 @@ function renderTextClaims(tc) {
 function renderTextAnalysis(tc) {
   const claims = tc.claims || [];
   const unv = tc.unverifiableParts || [];
-  if (!claims.length && !unv.length) return '';
+  const postCount = tc.source?.postCount || 0;
 
-  let html = '<div class="text-sub-head">内容分析</div>';
+  let html = '';
+
+  // 信息流页面有多条同构内容时必须提示：否则用户会误以为核查的是他看到的那条
+  if (postCount > 1) {
+    html += `<div class="text-warning">本页有 <b>${postCount}</b> 条内容，当前抽取的是其中第一条。建议先框选要核查的那段话，精确指定到具体某一条。</div>`;
+  }
+
+  if (!claims.length && !unv.length) return html;
+
+  html += '<div class="text-sub-head">内容分析</div>';
   html += `<div class="text-analysis-note">正文已拆解为 <b>${claims.length} 条</b>需要联网核实的断言${
     unv.length ? `，<b>${unv.length} 处</b>无需核实（主观表达 / 观点 / 广告 / 标签）` : ''
   }。</div>`;
@@ -433,6 +487,49 @@ function weakestConfidence(list) {
     if ((CONF_ORDER[c] ?? 1) < (CONF_ORDER[weakest] ?? 1)) weakest = c;
   }
   return weakest;
+}
+
+/** 判断时间戳是否已经过期（用于看门狗） */
+function isStale(ts, ms) {
+  try {
+    if (!ts) return false;
+    const t = new Date(ts).getTime();
+    if (!Number.isFinite(t)) return false;
+    return Date.now() - t > ms;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 计时器：核查期间显示已用秒数。
+ *
+ * LLM 调用期间不会有 storage 变化，侧栏不会重绘；没有这个计时器，
+ * 用户看到静止的「正在拆解可核查断言…」只能靠猜它是不是死了。
+ */
+let elapsedTimer = null;
+
+function startElapsedTicker() {
+  if (elapsedTimer) return;
+  elapsedTimer = setInterval(() => {
+    const tc = state.inv?.textCheck;
+    if (!tc || tc.status !== 'running') {
+      stopElapsedTicker();
+      return;
+    }
+    const el = document.querySelector('.text-elapsed');
+    if (!el) return;
+    const start = new Date(tc.startedAt || Date.now()).getTime();
+    const sec = Math.max(0, Math.round((Date.now() - start) / 1000));
+    el.textContent = `已用 ${sec} 秒`;
+  }, 1000);
+}
+
+function stopElapsedTicker() {
+  if (elapsedTimer) {
+    clearInterval(elapsedTimer);
+    elapsedTimer = null;
+  }
 }
 
 function renderVerdict(inv) {

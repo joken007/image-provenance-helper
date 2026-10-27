@@ -26,6 +26,60 @@ import { newInvestigationId, safeHost, base64ToUint8, uint8ToBase64, sha256Hex }
 import { putImageBlob } from '../lib/idb-blob-cache.js';
 import { readDimensions } from './pick-image.js';
 
+// ---------- 保活长连接 ----------
+//
+// 侧栏会维持一条名为 keepalive 的端口并每 20 秒发一次心跳。
+// MV3 的 Service Worker 空闲 30 秒就会被回收；有了这条连接，
+// 侧栏打开期间 SW 不会被回收，长耗时的文本核查链路才不会被中途掐断。
+// 侧栏关闭后端口断开，SW 照常按空闲回收，不留任何后台常驻。
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== 'keepalive') return;
+  port.onMessage.addListener(() => {
+    try {
+      port.postMessage({ type: 'pong', t: Date.now() });
+    } catch {
+      /* 端口可能已断开 */
+    }
+  });
+  port.onDisconnect.addListener(() => {});
+});
+
+/**
+ * 【SW 回收自愈】
+ *
+ * MV3 的 SW 被回收后，fire-and-forget 的核查链路就断了，状态会永远停在 running，
+ * 用户只能对着「正在拆解可核查断言…」转圈。
+ *
+ * SW 每次被唤醒都会执行本段：发现「状态还是 running 且超过 3 分钟没有更新」，
+ * 说明链路确实被掐断了，于是把状态改成 failed 并写明原因，
+ * 而不是让用户干等。
+ */
+async function recoverStaleTextCheck() {
+  try {
+    const inv = await loadSessionInvestigation();
+    if (!inv?.textCheck || inv.textCheck.status !== 'running') return;
+    const t = inv.textCheck.updatedAt || inv.textCheck.startedAt;
+    const age = Date.now() - new Date(t || 0).getTime();
+    if (!Number.isFinite(age) || age < 180000) return; // 3 分钟内认为仍在正常跑
+    await saveSessionInvestigation({
+      ...inv,
+      textCheck: {
+        ...inv.textCheck,
+        status: 'failed',
+        stage: 'failed',
+        note:
+          '核查中断：Service Worker 被浏览器回收，长任务被掐断。请重试；若反复出现，请框选更短的一段文字，或在设置里减少断言数与检索词数。',
+        finishedAt: new Date().toISOString(),
+      },
+      updatedAt: new Date().toISOString(),
+    });
+  } catch {
+    /* 忽略 */
+  }
+}
+
+recoverStaleTextCheck();
+
 // ---------- 安装与菜单 ----------
 
 /** 统一的右键菜单注册（安装与浏览器启动时都要做一次） */
@@ -297,6 +351,7 @@ async function runTextPipeline(ctx) {
           text: post.text || '',
           strategy: post.strategy || '',
           note: post.note || '',
+          postCount: post.postCount || 0,
           images: post.images || [],
         }
       : null,

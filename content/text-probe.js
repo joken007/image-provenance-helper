@@ -186,6 +186,7 @@ function extractPostContext() {
       strategy: 'selection',
       text: selection,
       selection,
+      postCount: 1,
       platform,
       author: pickBy(platform?.author) || '',
       title: pickBy(platform?.title) || document.title || '',
@@ -207,6 +208,7 @@ function extractPostContext() {
           strategy: 'platform-selector',
           text,
           selection: '',
+          postCount: countBy(platform.body),
           platform,
           author: pickBy(platform.author) || '',
           title: pickBy(platform.title) || document.title || '',
@@ -227,6 +229,7 @@ function extractPostContext() {
       strategy: 'generic-density',
       text: fallback.text,
       selection: '',
+      postCount: 1,
       platform,
       author: pickBy(platform?.author) || '',
       title: pickBy(platform?.title) || document.title || '',
@@ -270,6 +273,27 @@ function pickBy(selectors) {
     }
   }
   return '';
+}
+
+/**
+ * 统计页面上命中正文容器的元素数量。
+ *
+ * 【为什么需要】
+ *   信息流页面（X 首页、微博推荐流、小红书发现页）里有几十条同构的内容，
+ *   抽取器只能取到第一条。用户想核查的很可能是另一条 —— 这种情况必须告诉他，
+ *   而不是默默核查了一条不相干的内容还给出结论。
+ */
+function countBy(selectors) {
+  if (!selectors) return 0;
+  for (const sel of selectors) {
+    try {
+      const n = document.querySelectorAll(sel).length;
+      if (n > 0) return n;
+    } catch {
+      /* 选择器非法则跳过 */
+    }
+  }
+  return 0;
 }
 
 // ---------- 通用兜底：文字密度打分 ----------

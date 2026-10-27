@@ -129,7 +129,8 @@ export async function gatherEvidence(queries, opts = {}) {
       done += 1;
       if (onProgress) {
         try {
-          onProgress(done, list.length, query);
+          // 必须 await：进度回写要按顺序落盘，否则侧栏可能停在过期的步骤上
+          await onProgress(done, list.length, query);
         } catch {
           /* 回调异常不影响检索 */
         }
