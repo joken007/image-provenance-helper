@@ -109,6 +109,22 @@ function render() {
 }
 
 function renderLoading(inv) {
+  // 文本核查的会话用文本步骤，别把「抓取原图」这种图像步骤显示出来
+  if (inv.kind === 'text' && inv.textCheck) {
+    const tc = inv.textCheck;
+    const stage = tc.stage || '';
+    const steps = [
+      { key: 'extract', label: '抽取正文（框选 / 平台选择器 / 密度兜底）', done: Boolean(tc.source?.text) },
+      { key: 'claims', label: '拆解断言，判定哪些需要联网核实', done: (tc.claims || []).length > 0 },
+      { key: 'search', label: '联网检索取证（后台进行，页面不可见）', done: ['verify', 'summary', 'done'].includes(stage) },
+      { key: 'verify', label: '逐条核查与汇总', done: stage === 'done' },
+    ];
+    $('loading-steps').innerHTML = steps
+      .map((s) => `<li class="${s.done ? 'done' : 'doing'}">${s.label}</li>`)
+      .join('');
+    return;
+  }
+
   const steps = [
     { key: 'image', label: '抓取原图与还原大图地址', done: Boolean(inv.image?.sha256) },
     { key: 'meta', label: '解析 EXIF 与 PNG 生成参数', done: inv.status === 'ready' },
@@ -151,7 +167,8 @@ function renderTextCheck(inv) {
     $('text-verdict-box').innerHTML =
       `<div class="text-progress"><span class="spin-dot"></span>${escapeHtml(tc.note || '正在核查…')}</div>`;
     $('text-process-box').innerHTML = '';
-    $('text-claims-box').innerHTML = '';
+    // 分析阶段的结果立刻可见：用户能立刻看到「哪些内容需要联网核实」
+    $('text-claims-box').innerHTML = renderTextClaims(tc);
     $('text-sources-box').innerHTML = '';
     $('text-blocked').classList.add('hidden');
     return;
@@ -160,7 +177,7 @@ function renderTextCheck(inv) {
   if (tc.status === 'failed') {
     $('text-verdict-box').innerHTML = `<div class="text-error">${escapeHtml(tc.note || '核查失败')}</div>`;
     $('text-process-box').innerHTML = '';
-    $('text-claims-box').innerHTML = '';
+    $('text-claims-box').innerHTML = renderTextClaims(tc);
     $('text-sources-box').innerHTML = '';
     $('text-blocked').classList.add('hidden');
     return;
@@ -236,15 +253,93 @@ function renderTextProcess(tc) {
     }`;
 }
 
+/**
+ * 逐条核查区
+ *
+ * 【为什么要分两个阶段显示】
+ *   拆解（分析）先于取证。所以断言一拆出来就该立刻显示「这 N 条要去联网核实」，
+ *   否则用户在检索的这几十秒里只能看到一句「正在核查…」，
+ *   不知道插件到底在查什么、要查多久。
+ */
 function renderTextClaims(tc) {
   const results = tc.results || [];
-  if (!results.length) {
-    $('text-claims-box').innerHTML =
-      '<p class="muted small">正文里没有识别到可独立核查的断言。</p>';
-    return;
+  const claims = tc.claims || [];
+
+  let html = renderTextAnalysis(tc);
+
+  if (results.length) {
+    html += `<div class="text-sub-head">逐条核查（${results.length} 条断言）</div>` + renderResultCards(results);
+  } else if (claims.length) {
+    html += `<div class="text-sub-head">待核实断言（正在联网取证）</div>` + renderPendingList(claims);
+  } else if (tc.status === 'done') {
+    html += '<p class="muted small">正文里没有识别到可独立核查的断言。</p>';
   }
 
-  const items = results
+  $('text-claims-box').innerHTML = html;
+}
+
+/**
+ * 内容分析：哪些需要联网核实、哪些不用
+ * 这是整个链路的第一步，也是用户最想知道的一步。
+ */
+function renderTextAnalysis(tc) {
+  const claims = tc.claims || [];
+  const unv = tc.unverifiableParts || [];
+  if (!claims.length && !unv.length) return '';
+
+  let html = '<div class="text-sub-head">内容分析</div>';
+  html += `<div class="text-analysis-note">正文已拆解为 <b>${claims.length} 条</b>需要联网核实的断言${
+    unv.length ? `，<b>${unv.length} 处</b>无需核实（主观表达 / 观点 / 广告 / 标签）` : ''
+  }。</div>`;
+
+  if (claims.length) {
+    html += `<ul class="text-analysis-list">${claims
+      .map(
+        (c, i) => `<li>
+          <span class="an-index">${i + 1}</span>
+          <span class="an-type">${escapeHtml(c.type || '其他')}</span>
+          <span class="an-text">${escapeHtml(c.text)}</span>
+          ${
+            c.keywords && c.keywords.length
+              ? `<div class="an-kw">检索词：${escapeHtml(c.keywords.join('、'))}</div>`
+              : ''
+          }
+        </li>`
+      )
+      .join('')}</ul>`;
+  }
+
+  if (unv.length) {
+    html += `<div class="text-unverifiable">
+      <div class="an-sub">无需核实的部分</div>
+      <ul>${unv.map((u) => `<li>${escapeHtml(u)}</li>`).join('')}</ul>
+    </div>`;
+  }
+
+  return html;
+}
+
+/** 检索中：只显示待核实的断言与检索词 */
+function renderPendingList(claims) {
+  return `<ul class="text-analysis-list">${claims
+    .map(
+      (c, i) => `<li>
+        <span class="an-index">${i + 1}</span>
+        <span class="an-type">${escapeHtml(c.type || '其他')}</span>
+        <span class="an-text">${escapeHtml(c.text)}</span>
+        ${
+          c.keywords && c.keywords.length
+            ? `<div class="an-kw">检索词：${escapeHtml(c.keywords.join('、'))}</div>`
+            : ''
+        }
+      </li>`
+    )
+    .join('')}</ul>`;
+}
+
+/** 核查完成：每条断言的判定卡 */
+function renderResultCards(results) {
+  return results
     .map((r) => {
       const label = TEXT_VERDICT_LABEL[r.verdict] || r.verdict;
       const conf = r.confidence || 'low';
@@ -284,9 +379,6 @@ function renderTextClaims(tc) {
       </div>`;
     })
     .join('');
-
-  $('text-claims-box').innerHTML =
-    `<div class="text-sub-head">逐条核查（${results.length} 条断言）</div>` + items;
 }
 
 function renderTextSources(tc) {

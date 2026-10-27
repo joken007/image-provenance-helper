@@ -997,3 +997,87 @@ button:disabled {
   color: var(--muted);
   font-size: 12px;
 }
+
+/* ---------- 内容分析：哪些需要联网核实 ---------- */
+
+.text-analysis-note {
+  padding: 8px 10px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  color: #1e40af;
+  font-size: 12px;
+  line-height: 1.6;
+  margin-bottom: 8px;
+}
+
+.text-analysis-list {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+}
+
+.text-analysis-list li {
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  line-height: 1.6;
+}
+
+.an-index {
+  display: inline-block;
+  min-width: 18px;
+  height: 18px;
+  line-height: 18px;
+  text-align: center;
+  border-radius: 999px;
+  background: var(--brand);
+  color: #fff;
+  font-size: 11px;
+  margin-right: 6px;
+}
+
+.an-type {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  background: #e2e8f0;
+  color: #475569;
+  margin-right: 6px;
+}
+
+.an-text {
+  font-weight: 600;
+}
+
+.an-kw {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.text-unverifiable {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: #f8fafc;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+}
+
+.an-sub {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.text-unverifiable ul {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+}

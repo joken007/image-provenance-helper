@@ -248,7 +248,10 @@ async function runTextPipeline(ctx) {
     inv = {
       id: newInvestigationId(),
       schemaVersion: 3,
-      status: 'collecting',
+      // 【关键】文本核查的进度状态在 textCheck.status 里，
+      // 外层 status 必须直接置为 ready —— 否则侧栏会一直停在「正在取证中」的加载屏，
+      // 因为 render() 见到 status==='collecting' 就不会显示结果区。
+      status: 'ready',
       kind: 'text',
       createdAt: now,
       updatedAt: now,
@@ -298,6 +301,7 @@ async function runTextPipeline(ctx) {
         }
       : null,
     claims: [],
+    unverifiableParts: [],
     queries: [],
     sources: [],
     groups: [],
