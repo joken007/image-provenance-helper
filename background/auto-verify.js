@@ -244,11 +244,33 @@ function probePage(urlNeedle, sel) {
     /showcaptcha|not a robot|SmartCaptcha|sorry\/index|unusual traffic|异常流量|人机验证|安全验证|just a moment|Checking your browser/i.test(
       location.href + ' ' + bodyHead
     );
+  // 统计「出站链接数」：指向其它站点的链接数量。
+  // 【为什么需要】
+  //   有些引擎的结果页布局不稳定、class 名会变，但只要真出了结果，
+  //   就一定会给出通往原始站点的链接 —— 这比硬编码选择器稳健得多，
+  //   新增引擎时也不必先逆向一遍 DOM 结构。
+  let outLinks = 0;
+  try {
+    const here = location.hostname.replace(/^www\./, '');
+    for (const a of document.querySelectorAll('a[href^="http"]')) {
+      try {
+        const host = new URL(a.href).hostname.replace(/^www\./, '');
+        if (host && host !== here) outLinks += 1;
+      } catch {
+        /* ignore */
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+
   return {
     url: location.href,
     blocked,
     hasSelector: sel ? !!document.querySelector(sel) : true,
     textLen: (document.body?.innerText || '').length,
+    outLinks,
+    hasQuery: location.search.length > 1,
   };
 }
 
@@ -476,8 +498,12 @@ async function waitForResult(tabId, engine) {
 
     const urlOk = !check.urlIncludes || probe.url.includes(check.urlIncludes);
     const selOk = !check.selector || probe.hasSelector;
+    // 结果页必须带查询串（区分「搜索首页」与「搜索结果页」）
+    const queryOk = !check.urlHasQuery || probe.hasQuery;
+    // 结果页至少要有 N 个出站链接（出结果了必然会给出通往原始站点的链接）
+    const linksOk = !check.minLinks || (probe.outLinks || 0) >= check.minLinks;
 
-    if (urlOk && selOk && probe.textLen > 120) {
+    if (urlOk && selOk && queryOk && linksOk && probe.textLen > 120) {
       return { ok: true, url: probe.url };
     }
   }

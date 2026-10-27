@@ -311,6 +311,70 @@ test('引用被全部剥离后置信度降为 low', () => {
   assert.equal(out.results[0].confidence, 'low');
 });
 
+// ---------------- 8. 引擎清单一致性 ----------------
+
+test('每个自动反搜引擎在手动兜底表里都有对应条目', async () => {
+  const { AUTO_ENGINES } = await import('../lib/engine-adapters.js');
+  const { ENGINES, ENGINE_BY_ID } = await import('../lib/constants.js');
+
+  for (const e of AUTO_ENGINES) {
+    assert.ok(
+      ENGINE_BY_ID[e.id],
+      `引擎 ${e.id}（${e.name}）在 lib/constants.js 的 ENGINES 里缺失，` +
+        '会导致「手动打开一次」按钮报错'
+    );
+  }
+});
+
+test('每个自动引擎的配置字段齐全', async () => {
+  const { AUTO_ENGINES } = await import('../lib/engine-adapters.js');
+  for (const e of AUTO_ENGINES) {
+    assert.ok(e.id && e.name, '引擎缺少 id 或 name');
+    assert.ok(/^https:\/\//.test(e.homeUrl), `${e.id} 的 homeUrl 不是 https`);
+    assert.ok(e.fileSelector, `${e.id} 缺少 fileSelector`);
+    assert.ok(e.submitStrategy, `${e.id} 缺少 submitStrategy`);
+    assert.ok(e.readyCheck, `${e.id} 缺少 readyCheck`);
+    assert.ok(e.parse, `${e.id} 缺少 parse 配置`);
+    assert.ok(e.timeoutMs >= 10000, `${e.id} 的超时时间过短`);
+  }
+});
+
+test('二次元引擎已接入（来自 NooBox 二箱的引擎清单）', async () => {
+  const { AUTO_ENGINES } = await import('../lib/engine-adapters.js');
+  const ids = AUTO_ENGINES.map((e) => e.id);
+  assert.ok(ids.includes('iqdb'), '缺少 IQDB 二次元图库');
+  assert.ok(ids.includes('ascii2d'), '缺少 ASCII2D 二次元');
+
+  const iqdb = AUTO_ENGINES.find((e) => e.id === 'iqdb');
+  assert.ok(iqdb.fileSelector.includes('file'), 'IQDB 应走文件上传通道');
+  assert.ok(iqdb.readyCheck.urlHasQuery, 'IQDB 需用 urlHasQuery 区分首页与结果页');
+});
+
+test('通用解析器能处理未硬编码容器的引擎（退化为按域名去重扫链接）', async () => {
+  const { AUTO_ENGINES } = await import('../lib/engine-adapters.js');
+  // itemSelector 为 null 的引擎依赖「按域名去重扫全页链接」的兜底路径
+  const fallbackEngines = AUTO_ENGINES.filter((e) => !e.parse.itemSelector);
+  for (const e of fallbackEngines) {
+    // 必须有某种「结果页 ≠ 首页」的判据，否则要么永远等不到、要么永远误判就绪
+    const rc = e.readyCheck || {};
+    assert.ok(
+      rc.selector || rc.minLinks || rc.urlHasQuery,
+      `${e.id} 没有硬编码容器，必须提供 selector / minLinks / urlHasQuery 之一来区分结果页`
+    );
+  }
+});
+
+test('每个引擎都有能区分「结果页」与「首页」的就绪判据', async () => {
+  const { AUTO_ENGINES } = await import('../lib/engine-adapters.js');
+  for (const e of AUTO_ENGINES) {
+    const rc = e.readyCheck || {};
+    assert.ok(
+      rc.selector || rc.minLinks || rc.urlHasQuery,
+      `${e.id}（${e.name}）缺少就绪判据：只有 urlIncludes 不足以区分首页与结果页`
+    );
+  }
+});
+
 // ---------------- 7. 总体判定聚合 ----------------
 
 test('总体判定取最严重的一档', () => {

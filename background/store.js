@@ -126,9 +126,27 @@ export function defaultOptions() {
     sightengineApiKey: '',
     detectionProvider: 'none', // none | sightengine | hive
     // 全自动反搜：启用哪些引擎（按实测可靠性排序）
-    autoEngines: ['saucenao', 'tineye', 'bing', 'baidu', 'yandex', 'google-lens'],
+    autoEngines: [
+      'saucenao',
+      'iqdb',
+      'ascii2d',
+      'tineye',
+      'bing',
+      'baidu',
+      'yandex',
+      'google-lens',
+    ],
     // 兼容旧字段
-    enabledEngines: ['saucenao', 'tineye', 'bing', 'baidu', 'yandex', 'google-lens'],
+    enabledEngines: [
+      'saucenao',
+      'iqdb',
+      'ascii2d',
+      'tineye',
+      'bing',
+      'baidu',
+      'yandex',
+      'google-lens',
+    ],
     // ---- 文本事实核查 ----
     // 联网检索用哪些搜索引擎（对应 background/web-search.js 的 SEARCH_ENGINES）
     searchEngines: ['bing-cn', 'duckduckgo'],
