@@ -1,28 +1,82 @@
-# 图片溯源与辟谣助手 · 图文一体事实核查工作台
+<div align="center">
+
+# 图片溯源与辟谣助手
+
+**图文一体事实核查工作台 · Chrome / Edge 扩展**
 
 [![CI](https://github.com/joken007/image-provenance-helper/actions/workflows/ci.yml/badge.svg)](https://github.com/joken007/image-provenance-helper/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-![Chrome 116+](https://img.shields.io/badge/Chrome-116%2B-4285F4)
+![Chrome 116+](https://img.shields.io/badge/Chrome-116%2B-4285F4?logo=googlechrome&logoColor=white)
+![Manifest V3](https://img.shields.io/badge/Manifest-V3-4285F4?logo=googlechrome&logoColor=white)
+![零构建](https://img.shields.io/badge/零构建-加载即用-2ea44f)
+![License](https://img.shields.io/badge/license-MIT-green.svg)
 
-> Chrome / Edge (Manifest V3) 单人自用扩展。
->
-> **图像侧**：多引擎反向搜图、EXIF 与 PNG 生成参数扫描、C2PA 内容凭证 WASM 验签、Wayback 归档时间线。
->
-> **文本侧**：对一条社交平台内容（小红书 / 微博 / X / 抖音 / B站 / 知乎 / 公众号…）做事实核查 —— 拆解断言、联网取证、逐条判定，并给出**完整可复核的核查过程**。
->
-> **它不做真假宣判。** 插件负责把散落在各处的证据聚合成一张可核对的卡片，最终定性永远由人来做。
+</div>
+
+<div align="center">
+
+**图片** —— 多引擎反向搜图 · EXIF/PNG 生成参数 · C2PA 内容凭证验签 · Wayback 时间锚点
+
+**文字** —— 社媒内容事实核查 · 断言拆解 · 联网取证 · 逐条判定 · 可复核的核查过程
+
+</div>
+
+---
+
+## 目录
+
+- [它解决什么问题](#它解决什么问题)
+- [效果预览](#效果预览)
+- [快速开始](#一快速开始)
+- [使用流程](#二使用流程)
+- [全自动反搜是怎么做到的](#二补全自动反搜是怎么做到的)
+- [文本事实核查](#二补之二文本事实核查给一条社媒内容做核查)
+- [核心机制](#三核心机制说明)
+- [工程修正](#四对原文档-v10-的三处工程修正)
+- [测试](#五测试)
+- [目录结构](#六目录结构)
+- [能力边界](#七能力边界红线)
+- [常见问题](#八常见问题)
+- [许可与免责](#九许可与免责)
+
+---
+
+## 它解决什么问题
+
+看到一张被到处转的图、一条看着像真的消息，**你真正想知道的是"这玩意儿哪来的、是不是编的"**。
+
+这个扩展把散落在各处的证据聚合成**一张可核对的卡片**：
+
+| 你怀疑的 | 扩展怎么做 | 你拿到什么 |
+| :--- | :--- | :--- |
+| 这图是旧图新炒 | 多引擎反搜 + Wayback 首次收录时间 | 最早出现日期 + 出处站点 |
+| 这图被 PS 过 | EXIF/IPTC/XMP + PNG 生成参数 + C2PA 验签 | 确定性信号（篡改 / AI 生成 / 无异常） |
+| 这消息是编的 | 拆断言 → 联网取证 → 逐条判定 | 每条断言的判定 + **来源原文片段** |
+| 这消息有没有依据 | 来源独立性判定（转载不算多佐证） | 几个**真正独立**的来源 |
+| AI 说的对不对 | 幻觉 / 奉承审计 | 逐句核查 + 引用原文 |
+
+> **它不做真假宣判。** 插件负责把证据聚合成可核对的卡片，**最终定性永远由人来做**。
+
+---
 
 ## 效果预览
 
-**取证全自动完成** —— 后台跑完 8 个引擎、自动解析结果、自动反查 Wayback 时间锚点，检索页面全程不可见且跑完即关。下图是反搜结束后的真实侧栏状态：
+**取证全自动完成** —— 后台跑完 8 个引擎、自动解析结果、自动反查 Wayback 时间锚点，检索页面全程不可见且跑完即关。
 
 <img src="docs/screenshot-sidepanel.png" alt="全自动反搜完成后的侧栏：SauceNAO 命中 8 条、提取 5 个站点、Wayback 锚定 2015-05-15，结论自动判为「旧图挪用」" width="420">
 
-可以看到三个关键点：
+三个关键点：
 
 - 「反向搜图」顶部绿条：**自动检索已完成 · 所有临时页面均已关闭**
 - 「时间锚点」：命中站点最早被 Wayback 收录于 **2015-05-15**
 - 「证据信号」：**确定性 1 条**，结论条自动判为 **「旧图挪用」**
+
+<details>
+<summary><b>点击展开完整侧栏截图</b></summary>
+
+<img src="docs/screenshot-panel-full.png" alt="完整侧栏截图" width="100%">
+
+</details>
 
 生成的辟谣长图（2160px 宽，双遍排版自适应高度，无截断）：
 
@@ -244,6 +298,25 @@ IQDB 与 ASCII2D 已作为第 7、第 8 个引擎接入（见上表），走我�
 
 ## 二·补之二、文本事实核查：给一条社媒内容做核查
 
+### 它给出的结论长什么样
+
+<img src="docs/screenshot-text-summary.png" alt="文本核查结论区：总体判定「不实 · 置信中」、大标题「实施日期是 5 月 1 日，不是 3 月 1 日」、关键发现三条、数字与时间核对表、还缺什么证据" width="100%">
+
+关键在于**数字与时间核对表** —— 正文说的和来源写的并排列出，一眼就能看出差在哪：
+
+| 正文说法 | 来源说法 | 比对 |
+| :--- | :--- | :--- |
+| 3 月 1 日起实施 | 2026 年 5 月 1 日起施行 | 🔴 不一致 |
+| 2.4 亿人 | 约 2.4 亿人 | 🟢 一致 |
+
+### 核查过程是可见的
+
+<img src="docs/screenshot-text-claims.png" alt="内容分析与逐条核查区：正文被拆成 2 条需要联网核实的断言、2 处无需核实，逐条给出判定、置信度、证据原文片段与来源链接" width="100%">
+
+- **内容分析**：先告诉你哪些内容需要联网核实、哪些不用（主观表达 / 观点 / 广告 / 标签）
+- **逐条核查**：每条断言的判定、置信度、**来源原文片段**、立场标签（支持 / 反驳 / 背景）
+- 证据是**可复核的**：引用的每个 URL 都来自本次真实检索结果，模型编造的会被程序剥离并列出
+
 ### 为什么不用现成工具
 
 市面上的浏览器事实核查扩展（Theia / Facticity AI / Free Fact Checker / TruthValidator / Fact Sentinel / TruthLens 等）几乎都是同一个模式：**选中文字 → 丢给一个大模型（带联网搜索）→ 给个 verdict + 几个链接**。差异只在用哪个模型、要不要自己的 Key。
@@ -300,6 +373,37 @@ IQDB 与 ASCII2D 已作为第 7、第 8 个引擎接入（见上表），走我�
 ---
 
 ## 三、核心机制说明
+
+### 与同类工具的差别
+
+市面上的浏览器事实核查扩展（**Theia** / **Facticity AI** / **Free Fact Checker** / **TruthValidator** / **Fact Sentinel** / **TruthLens** / **二箱 NooBox**）几乎都是同一个模式：**选中内容 → 丢给一个大模型 → 给个 verdict + 几个链接**。
+
+实测下来它们有几个共同问题：
+
+| 问题 | 实证 | 本项目的做法 |
+| :--- | :--- | :--- |
+| **引用错误率高** | Columbia Tow Center 实测 8 个 AI 搜索引擎：Perplexity 引用错 37%（最好），Grok-3 错 **94%**。主因是**误归因** —— 事实对，但引用的来源并不真这么说，**不点开链接看不出来** | 强制模型给出**来源原文片段** + URL 必须在本次真实检索结果里，否则按幻觉剥离 |
+| **不区分「没查到」与「查不出来」** | 两者混成一档，等于把「不知道」写成「否定」 | 强制区分「未检索到相关来源」与「证据不足以判定」 |
+| **没有来源独立性概念** | 10 家网站转同一篇通稿 = 1 个独立佐证 | 按主办方 + 原文文本比对归组，转载**不算**多个佐证 |
+| **模型自报置信度不可靠** | 30 个 SOTA 模型过半准确率 < 55%，且不会承认「不知道」 | 置信度由**程序按独立来源组一致率**计算 |
+| **结果不可复核** | 只给链接不给原文 | 每条证据都带可点开的**原文引用** |
+
+对比一览：
+
+| 能力 | 二箱 NooBox | Theia / Facticity 等 | 本项目 |
+| :--- | :--- | :--- | :--- |
+| 多引擎以图搜图 | ✅ 12 种引擎 | — | ✅ 8 个（含二次元图库） |
+| 文本事实核查 | ❌ | ✅ 薄壳 | ✅ **五道防线 + 完整核查过程** |
+| 全自动、跑完自动关页 | ❌ 要人点 | ✅ | ✅ |
+| 结果结构化回自己的侧栏 | ❌ 在它面板里 | ✅ | ✅ 证据卡 |
+| Wayback 首次收录时间锚点 | ❌ | ❌ | ✅ 自动反查 |
+| 来源独立性判定 | ❌ | ❌ | ✅ |
+| URL 白名单防幻觉 | ❌ | ❌ | ✅ |
+| 社媒正文抽取 + 文图一体 | ❌ | ❌ | ✅ 11 个平台 |
+| 与二箱的分工 | 引擎清单已吸收进来（IQDB / ASCII2D） | — | — |
+
+---
+
 
 ### 怎么保证「搜的就是你点的那张图」
 
@@ -605,3 +709,44 @@ CDX 接口只收录被归档过的 URL。新图片或从未被爬取的页面查
 ## 九、许可与免责
 
 本工具仅用于辅助事实核查。所有结论由使用者人工判断并承担相应责任。核查他人图片前请注意当地法律对肖像权、名誉权与版权的规定。
+
+---
+
+## 十、贡献与致谢
+
+### 想加一个反搜引擎
+
+1. 在 `lib/engine-adapters.js` 加一条配置
+2. 若引擎走 URL 直搜 → 填 `buildDirectUrl`；若需要 multipart 上传 → 填 `fileSelector`
+3. 若该引擎**只认直链**（上传会传假文件名），加 `preferDirect: true`
+4. 跑 `node test/e2e-engine-flow.mjs`（可用 `WB_ENGINE=<id>` 指定引擎、`WB_PUBLIC_IMG=1` 用公网图）
+5. 跑 `npm test` —— 有几项一致性测试会自动校验你的配置是否完整
+
+> **两个务必遵守的约定**（都是踩过坑总结的）：
+> - **不要在探测函数里调用页面的一次性开关**（如 SauceNAO 的 `isSearchReady`，读一次就置 false）。探测只用无副作用的外部信号。
+> - **不要靠文案模糊匹配找按钮**。宁可要求精确选择器 —— Bing 的「搜索」按钮会让人以为是普通网页搜索。
+
+### 用到的开源项目
+
+| 项目 | 用途 |
+| :--- | :--- |
+| [exifr](https://github.com/MikeKovarik/exifr) | EXIF / IPTC / XMP 解析 |
+| [@contentauth/c2pa-wasm](https://github.com/contentauth/c2pa-js) | C2PA 内容凭证 WASM 验签 |
+| [Playwright](https://playwright.dev) | 浏览器端 e2e 测试 |
+
+### 参考文献
+
+- [Columbia Tow Center, AI Search Citation Accuracy (CJR, 2025)](https://www.cjr.org/tow_center/we-compared-eight-ai-search-engines-theyre-all-bad-at-citing-news.php) —— 8 个 AI 搜索引擎的引用准确率实测
+- [Sakana AI, AI Detectors Exist on the Shelf but They're Not Free (2024)](https://sakana.ai/ai-detectors/) —— 30 个 AI 生成检测模型的横向评测
+- [FERG, Fine-grained Hallucination Evaluation (2025)](https://arxiv.org/abs/2504.09454) —— 检索粒度与事实性的关系
+- [Google Fact Check Tools API](https://developers.google.com/fact-check/tools/api) —— 专业核查库
+- [InVID / WeVerify](https://weverify.eu/) —— 图像与视频核查工具集
+
+---
+
+<div align="center">
+
+** Made with 一份较真劲，在真实浏览器里反复验证出来的确定性。**
+
+</div>
+
