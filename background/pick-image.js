@@ -11,7 +11,7 @@ import { base64ToUint8, uint8ToBase64, sha256Hex, upgradeToOriginalUrl, describe
 import { putImageBlob } from '../lib/idb-blob-cache.js';
 
 /**
- * @param {object} ctx { tabId, frameId, srcUrl, pageUrl, pageTitle }
+ * @param {object} ctx { tabId, windowId, frameId, srcUrl, pageUrl, pageTitle, pickLargest }
  */
 export async function acquireImage(ctx) {
   const notes = [];
@@ -30,21 +30,62 @@ export async function acquireImage(ctx) {
     cdnNote: ctx.srcUrl ? describeCdnRule(ctx.srcUrl) : '',
   };
 
-  // 从 content script 拿更精确的目标信息（可能含原图 URL 与像素尺寸）
+  // ---------- 目标图 URL 的确定：右键菜单优先，页面探测兜底 ----------
+  //
+  // 【为什么不能无条件采用页面探测结果】
+  //   content script 里记录的是「最后一次右键命中的图片」，是个长期存在的全局变量。
+  //   如果用户先右键了 A 图，之后又用快捷键/工具栏触发（此时没有右键动作），
+  //   探测返回的仍是 A 图 —— 结果就是「搜的不是用户以为的那张」。
+  //   所以：右键菜单已经明确给了 srcUrl 时，以它为准；只有它为空（快捷键/工具栏触发）才用探测结果。
+  //
+  // 【探测为何固定查主框架】
+  //   page-probe.js 在主框架注册了 contextmenu 监听（all_frames: true 只是让它能在子框架里也跑，
+  //   但每个框架各有一份自己的 lastRightClickTarget）。右键 iframe 里的图时，
+  //   命中记录在子框架；而这里统一从主框架问，拿不到就用 ctx.srcUrl —— 右键菜单给的 srcUrl
+  //   本来就是权威值，因此这个组合不会取错图，也不会因为框架 ID 对不上而报错。
   let probe = null;
   try {
-    probe = await requestProbeTarget(ctx.tabId, ctx.frameId);
+    probe = await requestProbeTarget(ctx.tabId, 0);
   } catch (e) {
     notes.push(`页面探测不可用：${e?.message || e}`);
   }
 
-  if (probe?.originalUrl) {
-    meta.originalUrl = probe.originalUrl;
-    meta.normalizedUrl = probe.normalizedUrl || upgradeToOriginalUrl(probe.originalUrl);
-    meta.cdnNote = describeCdnRule(meta.originalUrl) || meta.cdnNote;
+  const ctxSrc = String(ctx.srcUrl || '').trim();
+  const probeUrl = String(probe?.originalUrl || '').trim();
+
+  if (ctxSrc) {
+    // 右键菜单来源：以 ctx.srcUrl 为准。若探测结果与它不同，记录下来供排查。
+    notes.push('取图目标来自右键菜单命中项');
+    if (probeUrl && !sameImage(ctxSrc, probeUrl)) {
+      notes.push('（页面探测结果与右键项不一致，已按右键项为准）');
+    }
+  } else if (probeUrl) {
+    meta.originalUrl = probeUrl;
+    meta.normalizedUrl = probe.normalizedUrl || upgradeToOriginalUrl(probeUrl);
+    meta.cdnNote = describeCdnRule(probeUrl) || meta.cdnNote;
+    notes.push('取图目标来自页面探测（无右键上下文）');
+  }
+
+  // 尺寸/画布信息：无论 URL 从哪来，探测到的尺寸都可参考
+  if (probe) {
     if (probe.width) meta.width = probe.width;
     if (probe.height) meta.height = probe.height;
     if (probe.sourceType === 'canvas') meta.acquiredVia = 'manual-drop';
+  }
+
+  // 快捷键/工具栏触发（srcUrl 为空）且要求「取页面最大图」时，
+  // 若探测没给结果，就退回按页面内容挑主图
+  if (!ctxSrc && !probeUrl && ctx.pickLargest) {
+    const largest = await pickLargestInPage(ctx.tabId, ctx.frameId);
+    if (largest?.url) {
+      meta.originalUrl = largest.url;
+      meta.normalizedUrl = upgradeToOriginalUrl(largest.url);
+      meta.width = largest.width || meta.width;
+      meta.height = largest.height || meta.height;
+      notes.push('已按页面可见面积挑选主图');
+    } else {
+      notes.push('页面内未找到可用图片');
+    }
   }
 
   const targetUrl = meta.normalizedUrl || meta.originalUrl;
@@ -87,8 +128,14 @@ export async function acquireImage(ctx) {
   }
 
   // ---------- Level 3：视口截图裁剪兜底 ----------
+  //
+  // 【为什么必须传 windowId 而不是 tabId】
+  //   chrome.tabs.captureVisibleTab(windowId?, options?) 的第一个参数是 **窗口 ID**，不是标签页 ID。
+  //   传 tabId 进去时，Chrome 会拿这个数字当窗口 ID 去找窗口 —— 多窗口场景下会截到
+  //   另一个窗口的可见区域，再按坐标裁剪，就得到一张完全不相干的图，
+  //   而整个流程看起来「正常成功」。这是最隐蔽的一类「搜错图」。
   if (probe?.rect && ctx.tabId) {
-    const shot = await captureRegion(ctx.tabId, probe.rect);
+    const shot = await captureRegion(ctx.tabId, ctx.windowId, probe.rect);
     if (shot?.bytesBase64) {
       meta.acquiredVia = 'screenshot';
       meta.mime = shot.mime || 'image/png';
@@ -97,7 +144,7 @@ export async function acquireImage(ctx) {
       notes.push('前两级取图失败，已降级为视口区域截图（原始元数据不可用）');
       return finalize(meta, shot.bytesBase64, notes);
     }
-    notes.push('截图兜底同样失败');
+    notes.push(`截图兜底同样失败：${shot?.error || '未知原因'}`);
   }
 
   // 全部失败：仍返回一个壳，交由侧栏提示用户手动上传
@@ -121,6 +168,36 @@ async function finalize(meta, bytesBase64, notes) {
   return { meta, bytesBase64, notes };
 }
 
+/**
+ * 取图自检：记录「实际拿去搜索的图」的关键指纹。
+ *
+ * 【为什么要做这一步】
+ *   「搜错图」是这类插件最致命也最难发现的问题 —— 全流程看起来都成功，
+ *   只是搜的不是用户点的那张。除了从取图逻辑上逐条堵漏，还必须让用户**看得见**：
+ *   侧栏会展示实际取到的缩略图、来源 URL、尺寸、字节数、SHA-256 前 12 位。
+ *   一旦不对，用户一眼就能发现，而不是等搜出一堆不相干结果才察觉。
+ */
+export function describeAcquisition(meta, bytesBase64) {
+  const bytes = bytesBase64 ? Math.floor((bytesBase64.length * 3) / 4) : 0;
+  return {
+    url: meta.normalizedUrl || meta.originalUrl || '',
+    originalUrl: meta.originalUrl || '',
+    via: meta.acquiredVia || '',
+    viaLabel: {
+      'page-context': '页面上下文抓取（带 Referer/Cookie）',
+      direct: '扩展直连抓取',
+      screenshot: '视口截图裁剪',
+      'manual-drop': '手动上传',
+    }[meta.acquiredVia] || meta.acquiredVia || '',
+    width: meta.width || 0,
+    height: meta.height || 0,
+    mime: meta.mime || '',
+    bytes,
+    sha256: meta.sha256 || '',
+    shaShort: (meta.sha256 || '').slice(0, 12),
+  };
+}
+
 /** 向 content script 询问右键命中的图片目标 */
 function requestProbeTarget(tabId, frameId) {
   return new Promise((resolve, reject) => {
@@ -132,6 +209,62 @@ function requestProbeTarget(tabId, frameId) {
       })
       .catch((e) => reject(e));
   });
+}
+
+/**
+ * 判断两个 URL 是否指向同一张图（宽松比较）。
+ * 用于发现「右键项」与「页面探测项」不一致的情况，只作提示、不改变取值。
+ */
+function sameImage(a, b) {
+  try {
+    const ua = new URL(a);
+    const ub = new URL(b);
+    if (ua.href === ub.href) return true;
+    // 同一路径不同尺寸参数（CDN 缩略图 vs 原图）视为同一张
+    if (ua.origin === ub.origin && ua.pathname === ub.pathname) return true;
+    return false;
+  } catch {
+    return String(a || '') === String(b || '');
+  }
+}
+
+/**
+ * 按「页面可见面积」挑主图（快捷键/工具栏触发、且页面探测无结果时使用）
+ *
+ * 【为什么按可见面积而不是原始像素】
+ *   用户看到的「主图」是屏幕上最大的那张。有些站点会把巨大的隐藏图塞在页面里
+ *   （预加载、SEO 图），按原始像素挑会挑到用户根本没看到的那张。
+ *   因此优先按 getBoundingClientRect 的可见面积排序。
+ */
+async function pickLargestInPage(tabId, frameId) {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [frameId ?? 0] },
+      func: () => {
+        let best = null;
+        let bestArea = 0;
+        for (const img of document.querySelectorAll('img')) {
+          const r = img.getBoundingClientRect();
+          if (r.width < 120 || r.height < 120) continue; // 排除图标、头像
+          // 只考虑当前视口内可见的图
+          if (r.bottom < 0 || r.top > innerHeight || r.right < 0 || r.left > innerWidth) continue;
+          const area = r.width * r.height;
+          if (area > bestArea) {
+            bestArea = area;
+            best = {
+              url: img.currentSrc || img.src || '',
+              width: img.naturalWidth || Math.round(r.width),
+              height: img.naturalHeight || Math.round(r.height),
+            };
+          }
+        }
+        return best;
+      },
+    });
+    return results?.[0]?.result || null;
+  } catch {
+    return null;
+  }
 }
 
 /** Level 1：在页面上下文里 fetch（自动带 Referer 与 Cookie） */
@@ -200,11 +333,22 @@ async function fetchDirect(url) {
   }
 }
 
-/** Level 3：视口截图 + 坐标裁剪 */
-async function captureRegion(tabId, rect) {
+/**
+ * Level 3：视口截图 + 坐标裁剪
+ *
+ * 【务必注意参数语义】
+ *   captureVisibleTab(windowId?, options?) 的第一个参数是【窗口 ID】。
+ *   传错会静默截到别的窗口，产生一张看起来正常、实际完全不相干的图。
+ *   因此这里显式要求 windowId，拿不到就宁可失败（上层会提示手动上传），
+ *   也绝不用 tabId 去凑。
+ */
+async function captureRegion(tabId, windowId, rect) {
   try {
+    if (!Number.isInteger(windowId) || windowId < 0) {
+      return { error: '缺少 windowId，无法安全截图（避免截错窗口）' };
+    }
     const dpr = rect.dpr || 1;
-    const dataUrl = await chrome.tabs.captureVisibleTab(tabId, { format: 'png' });
+    const dataUrl = await chrome.tabs.captureVisibleTab(windowId, { format: 'png' });
     const blob = await (await fetch(dataUrl)).blob();
     const bytes = new Uint8Array(await blob.arrayBuffer());
 

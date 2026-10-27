@@ -24,7 +24,7 @@ import { VERDICTS } from '../lib/constants.js';
 import { AUTO_ENGINES, AUTO_ENGINE_BY_ID } from '../lib/engine-adapters.js';
 import { newInvestigationId, safeHost, base64ToUint8, uint8ToBase64, sha256Hex } from '../lib/utils.js';
 import { putImageBlob } from '../lib/idb-blob-cache.js';
-import { readDimensions } from './pick-image.js';
+import { readDimensions, describeAcquisition } from './pick-image.js';
 
 // ---------- 保活长连接 ----------
 //
@@ -231,6 +231,8 @@ async function runInvestigationPipeline(ctx) {
     // 2) 取图与原图归一化
     const imgResult = await acquireImage(ctx);
     inv.image = { ...inv.image, ...imgResult.meta };
+    // 取图自检：把「实际拿去搜索的图」的指纹记下来，侧栏会显示出来供核对
+    inv.image.acquisition = describeAcquisition(inv.image, imgResult.bytesBase64);
 
     // 先给每个引擎放一个占位卡片，侧栏立刻能看到「谁在跑」
     inv.engines = await prepareEngineSlots();

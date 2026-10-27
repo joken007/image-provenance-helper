@@ -8,6 +8,19 @@
 //     => 解析 srcset 取最大宽度候选，再按 CDN 规则还原原图 URL。
 
 let lastRightClickTarget = null;
+/** 记录右键命中的时刻，用于判断该目标是否已经过期 */
+let lastRightClickAt = 0;
+
+/**
+ * 右键目标的有效期。
+ *
+ * 【为什么必须有时效】
+ *   lastRightClickTarget 是页面级全局变量。如果不清空也不设过期，
+ *   用户右键 A 图之后过很久再触发核查（甚至只是点了快捷键），
+ *   探测返回的仍是 A 图 —— 结果就是「搜的不是用户以为的那张图」。
+ *   超过这个时间就认为该目标已失效，交给上层按「页面主图」逻辑处理。
+ */
+const TARGET_TTL_MS = 120000;
 
 // 记录右键点击瞬间的真实图片信息（穿透顶层透明遮罩 div）
 document.addEventListener(
@@ -16,12 +29,23 @@ document.addEventListener(
     try {
       const elements = document.elementsFromPoint(e.clientX, e.clientY);
       lastRightClickTarget = findBestImageFromElements(elements, e.clientX, e.clientY);
+      lastRightClickAt = Date.now();
     } catch {
       lastRightClickTarget = { fallbackX: e.clientX, fallbackY: e.clientY };
+      lastRightClickAt = Date.now();
     }
   },
   true
 );
+
+// 页面导航（SPA 路由切换、滚动加载新内容）后旧目标必然失效，直接清空
+window.addEventListener('popstate', clearTarget, true);
+window.addEventListener('hashchange', clearTarget, true);
+
+function clearTarget() {
+  lastRightClickTarget = null;
+  lastRightClickAt = 0;
+}
 
 function findBestImageFromElements(elements, clientX, clientY) {
   for (const el of elements) {
@@ -149,6 +173,13 @@ function buildTargetInfo(el, rawUrl, sourceType) {
 // 响应 Service Worker 的取图请求
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === 'probe:get-context-target') {
+    // 过期目标一律视为无效，返回 null 让上层改走「页面主图」逻辑，
+    // 避免把上一次右键的图当成这一次的核查对象。
+    const expired = !lastRightClickAt || Date.now() - lastRightClickAt > TARGET_TTL_MS;
+    if (expired) {
+      sendResponse(null);
+      return false;
+    }
     sendResponse(lastRightClickTarget);
     return false;
   }
@@ -159,6 +190,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === 'probe:set-probe') {
     // 供自动化测试注入探测结果（不影响正常流程）
     lastRightClickTarget = msg.probe || null;
+    lastRightClickAt = msg.probe ? Date.now() : 0;
     sendResponse({ ok: true });
     return false;
   }

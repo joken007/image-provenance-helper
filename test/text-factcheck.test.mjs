@@ -400,3 +400,40 @@ test('部分属实部分无法判定 → 总体为无法判定', () => {
     TEXT_VERDICTS.UNVERIFIABLE
   );
 });
+
+// ---------------- 9. 取图正确性（防「搜错图」） ----------------
+
+test('captureVisibleTab 必须传 windowId 而不是 tabId', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../background/pick-image.js', import.meta.url), 'utf8');
+  // 定位调用点，检查其参数名
+  const m = src.match(/captureVisibleTab\(\s*([A-Za-z_$][\w$]*)/);
+  assert.ok(m, '未找到 captureVisibleTab 调用');
+  assert.equal(
+    m[1],
+    'windowId',
+    `captureVisibleTab 的第一个参数是窗口 ID，传 ${m[1]} 会在多窗口下截到别的窗口，` +
+      '产生一张看起来正常、实际完全不相干的图'
+  );
+});
+
+test('取图链路必须记录 acquisition 自检信息', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../background/service-worker.js', import.meta.url), 'utf8');
+  assert.match(src, /describeAcquisition/, '取图后未记录自检信息，用户无法核对搜的是哪张图');
+});
+
+test('页面探测目标必须有时效，过期即失效', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../content/page-probe.js', import.meta.url), 'utf8');
+  assert.match(src, /TARGET_TTL_MS/, '右键目标没有时效限制，会复用过期的图');
+  assert.match(src, /lastRightClickAt/, '未记录右键时刻，无法判断目标是否过期');
+});
+
+test('右键菜单已给出 srcUrl 时，不得被页面探测结果覆盖', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../background/pick-image.js', import.meta.url), 'utf8');
+  // 必须存在「以 ctx.srcUrl 为准」的分支
+  assert.match(src, /if \(ctxSrc\)/, '取图目标未对「右键项」与「探测项」做优先级区分');
+  assert.match(src, /已按右键项为准/, '缺少两者不一致时的处理与提示');
+});

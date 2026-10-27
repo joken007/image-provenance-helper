@@ -563,6 +563,9 @@ function renderImage(inv) {
   $('cdn-note').textContent = img.cdnNote || '';
   $('cdn-note').classList.toggle('hidden', !img.cdnNote);
 
+  // 取图自检：让用户一眼确认「搜的就是我点的那张」
+  renderAcquisition(img);
+
   // 防盗链提示
   // 全自动模式下不再需要「复制到剪贴板 + Ctrl+V」——
   // 图片字节直接由后台注入引擎的上传框，防盗链图片同样能全自动检索。
@@ -580,6 +583,53 @@ function renderImage(inv) {
       })
       .catch(() => {});
   }
+}
+
+/**
+ * 取图自检面板
+ *
+ * 【为什么必须有】
+ *   「搜错图」是这类插件最致命也最难自察的问题：流程全部成功，
+ *   只是搜的不是用户点的那张。逻辑上已经逐条堵漏，但用户仍需要看得见 ——
+ *   这里展示实际取到的图的来源、抓取方式、尺寸、字节数、SHA-256 前 12 位，
+ *   一旦不对，一眼就能发现，而不是等搜出一堆不相干结果才察觉。
+ */
+function renderAcquisition(img) {
+  const box = $('acquisition-box');
+  const a = img.acquisition;
+  if (!box) return;
+  if (!a || !a.url) {
+    box.classList.add('hidden');
+    return;
+  }
+  box.classList.remove('hidden');
+
+  const warn =
+    a.via === 'screenshot'
+      ? '<div class="acq-warn">⚠ 这张图是「视口截图裁剪」得到的，不是原图字节。裁剪范围以你右键时的可见区域为准，可能包含相邻元素。元数据与内容凭证在这种情况下不可用。</div>'
+      : '';
+
+  box.innerHTML = `
+    <div class="acq-title">实际核查对象（请确认是你要查的那张）</div>
+    <div class="acq-row"><span class="acq-k">抓取方式</span><span class="acq-v">${escapeHtml(a.viaLabel || a.via)}</span></div>
+    <div class="acq-row"><span class="acq-k">尺寸 / 体积</span><span class="acq-v">${a.width} × ${a.height} · ${formatBytes(a.bytes)}</span></div>
+    <div class="acq-row"><span class="acq-k">SHA-256</span><span class="acq-v mono">${escapeHtml(a.shaShort)}…</span></div>
+    <div class="acq-row"><span class="acq-k">来源地址</span><span class="acq-v mono acq-url" title="${escapeHtml(a.url)}">${escapeHtml(
+      shortenForDisplay(a.url)
+    )}</span></div>
+    ${warn}`;
+}
+
+function formatBytes(n) {
+  const v = Number(n) || 0;
+  if (v < 1024) return `${v} B`;
+  if (v < 1024 * 1024) return `${(v / 1024).toFixed(1)} KB`;
+  return `${(v / 1024 / 1024).toFixed(2)} MB`;
+}
+
+function shortenForDisplay(u) {
+  const s = String(u || '');
+  return s.length > 70 ? s.slice(0, 34) + '…' + s.slice(-32) : s;
 }
 
 function renderEngines(inv) {
