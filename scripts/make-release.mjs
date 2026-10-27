@@ -26,8 +26,18 @@ const ONLY_CHECK = process.argv.includes('--check');
 /** 要打包进扩展的文件（与 manifest 实际加载的保持一致） */
 const INCLUDE_DIRS = ['background', 'content', 'sidepanel', 'options', 'lib', 'assets', 'vendor'];
 const INCLUDE_FILES = ['manifest.json'];
+/**
+ * 校验工具也一并打包
+ *
+ * 【为什么要带上】
+ *   scripts/verify-vendor.mjs 与 scripts/c2pa.sri.txt 是「WASM 完整性校验」的能力：
+ *   别人从 Release 拿到扩展后，能自己确认这个 8MB 的 WASM 没被掉包。
+ *   不带上就等于只有作者自己能验证，发布出去的包是黑盒。
+ *   这两个文件很小（合计约 5KB），带上零成本。
+ */
+const INCLUDE_VERIFY = ['scripts/verify-vendor.mjs', 'scripts/c2pa.sri.txt'];
 /** 排除的文件与目录 */
-const EXCLUDE = new Set(['node_modules', '.git', 'dist', 'scripts', 'test', 'docs', '.github']);
+const EXCLUDE = new Set(['node_modules', '.git', 'dist', 'test', 'docs', '.github']);
 
 function log(msg) {
   console.log(`  ${msg}`);
@@ -88,6 +98,11 @@ function main() {
   for (const f of INCLUDE_FILES) {
     const p = join(ROOT, f);
     if (existsSync(p)) files.push(p);
+  }
+  for (const f of INCLUDE_VERIFY) {
+    const p = join(ROOT, f);
+    if (existsSync(p)) files.push(p);
+    else console.warn(`  ⚠️  缺少 ${f}（校验能力将不可用）`);
   }
   log(`✅ 收集到 ${files.length} 个文件`);
 
