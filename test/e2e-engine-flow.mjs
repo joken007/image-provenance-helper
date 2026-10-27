@@ -75,6 +75,26 @@ function makePng(w, h, rgb) {
   ]);
 }
 
+/** 读 PNG/JPEG 尺寸（够用即可） */
+function readPngOrJpegSize(buf) {
+  if (buf[0] === 0x89 && buf[1] === 0x50) {
+    return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+  }
+  if (buf[0] === 0xff && buf[1] === 0xd8) {
+    let i = 2;
+    while (i < buf.length - 9) {
+      if (buf[i] !== 0xff) { i++; continue; }
+      const marker = buf[i + 1];
+      const len = (buf[i + 2] << 8) | buf[i + 3];
+      if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
+        return { height: (buf[i + 5] << 8) | buf[i + 6], width: (buf[i + 7] << 8) | buf[i + 8] };
+      }
+      i += 2 + len;
+    }
+  }
+  return { width: 0, height: 0 };
+}
+
 async function main() {
   const userDataDir = mkdtempSync(join(tmpdir(), 'wb-flow-'));
   const context = await chromium.launchPersistentContext(userDataDir, {
@@ -93,18 +113,19 @@ async function main() {
     let sw = context.serviceWorkers()[0];
     if (!sw) sw = await context.waitForEvent('serviceworker', { timeout: 25000 });
 
-    // 只启用 SauceNAO，缩短测试时间、降低风控噪音
-    console.log('\n=== 准备：只启用 SauceNAO 引擎 ===');
-    await sw.evaluate(async () => {
+    // 通过环境变量指定要测的引擎（默认只测 SauceNAO）
+    const engineId = process.env.WB_ENGINE || 'saucenao';
+    console.log(`\n=== 准备：只启用 ${engineId} 引擎 ===`);
+    await sw.evaluate(async (eid) => {
       await chrome.storage.local.set({
         options: {
-          autoEngines: ['saucenao'],
-          enabledEngines: ['saucenao'],
+          autoEngines: [eid],
+          enabledEngines: [eid],
           autoOpenEngines: true,
         },
       });
-    });
-    ok('配置已写入（仅 SauceNAO）', true);
+    }, engineId);
+    ok(`配置已写入（仅 ${engineId}）`, true);
 
     // 打开侧栏页面（同扩展源，可直接用 chrome.* API）
     const extId = new URL(sw.url()).host;
@@ -116,17 +137,42 @@ async function main() {
     // 用扩展自带的真实 PNG 图标作为测试图：
     // 纯色小图会被 SauceNAO 的 checkImageFile 判为不合格（"too small"），
     // 那是引擎的正常行为，不是我们的 bug；要用真实图片才能验证提交链路。
-    const imgPath = join(ROOT, 'assets', 'icon-128.png');
-    const img = readFileSync(imgPath);
-    const b64 = img.toString('base64');
-    console.log(`  测试图：icon-128.png（${img.length} 字节）`);
+    // 测试图有两种来源：
+    //  · 本地图（默认）—— 走 DataTransfer 上传路径
+    //  · 公网图（WB_PUBLIC_IMG=1）—— 带公网直链，可测 URL 直搜路径
+    const usePublic = process.env.WB_PUBLIC_IMG === '1';
+    // 用一个确定可直连的公网真实图片（picsum 返回 JPEG）
+    const PUBLIC_URL = 'https://picsum.photos/seed/factcheck1/640/480.jpg';
 
-    const dropResult = await panel.evaluate(async (b64) => {
+    let img;
+    let b64;
+    let publicUrl = '';
+    let imgW = 128;
+    let imgH = 128;
+    if (usePublic) {
+      publicUrl = PUBLIC_URL;
+      // 拉取同一张图作为本地字节（保证「送出去的」与「直链指向的」是同一张）
+      const resp = await fetch(PUBLIC_URL);
+      img = Buffer.from(await resp.arrayBuffer());
+      b64 = img.toString('base64');
+      const dim = readPngOrJpegSize(img);
+      imgW = dim.width;
+      imgH = dim.height;
+      console.log(`  测试图：公网直链（${img.length} 字节）`);
+    } else {
+      const imgPath = join(ROOT, 'assets', 'icon-128.png');
+      img = readFileSync(imgPath);
+      b64 = img.toString('base64');
+      console.log(`  测试图：icon-128.png（${img.length} 字节，本地无公网直链）`);
+    }
+
+    const dropResult = await panel.evaluate(async ({ b64, publicUrl }) => {
       return await new Promise((resolve) => {
         chrome.runtime.sendMessage(
           {
             type: 'inv:manual-drop',
             file: { bytesBase64: b64, fileName: 'e2e.png', mime: 'image/png' },
+            publicUrl,
           },
           (res) => {
             if (chrome.runtime.lastError) {
@@ -137,7 +183,7 @@ async function main() {
           }
         );
       });
-    }, b64);
+    }, { b64, publicUrl });
 
     ok('核查会话已建立', Boolean(dropResult?.inv?.id), dropResult?.error || dropResult?.inv?.id || '');
 
@@ -148,13 +194,19 @@ async function main() {
       const acq = dropResult.inv.image?.acquisition;
       ok('取图自检信息存在', Boolean(acq), acq ? `${acq.viaLabel} ${acq.width}×${acq.height}` : '缺失');
       if (acq) {
-        ok('取到的尺寸与上传图一致（128×128）', acq.width === 128 && acq.height === 128, `${acq.width}×${acq.height}`);
+        // 尺寸应与「送进去的那张图」的真实像素一致
+        // （公网图是 640×480，本地图标是 128×128）
+        ok(
+          '取到的尺寸与上传图一致',
+          acq.width === imgW && acq.height === imgH,
+          `${acq.width}×${acq.height}（期望 ${imgW}×${imgH}）`
+        );
         ok('有 SHA-256 指纹', Boolean(acq.shaShort), acq.shaShort);
       }
 
       // 等反搜跑完（SauceNAO 单引擎，最长约 60 秒）
       console.log('\n=== 等待反搜完成（最长 90 秒） ===');
-      const engineResult = await waitForEngineDone(panel, 'saucenao', 90000);
+      const engineResult = await waitForEngineDone(panel, engineId, 120000);
       reportEngineResult(engineResult);
     }
   } catch (e) {

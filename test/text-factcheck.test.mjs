@@ -565,3 +565,67 @@ test('提交后必须确认真的离开了首页', async () => {
   const src = fs.readFileSync(new URL('../background/auto-verify.js', import.meta.url), 'utf8');
   assert.match(src, /confirmLeftHome/, '缺少「提交是否生效」的确认，会导致误报为结果超时');
 });
+
+// ---------------- 13. 引擎适配（实测校准） ----------------
+
+test('引擎必须声明它支持的检索模式', async () => {
+  const { AUTO_ENGINES } = await import('../lib/engine-adapters.js');
+  for (const e of AUTO_ENGINES) {
+    assert.ok(
+      e.upload === 'file-input' || e.buildDirectUrl,
+      `${e.id} 既不支持文件上传也没有 URL 直搜协议，无法工作`
+    );
+  }
+});
+
+test('百度识图必须首选 URL 直搜', async () => {
+  const { AUTO_ENGINE_BY_ID } = await import('../lib/engine-adapters.js');
+  const baidu = AUTO_ENGINE_BY_ID['baidu'];
+  assert.ok(baidu, '缺少百度识图引擎');
+  assert.ok(
+    baidu.buildDirectUrl,
+    '百度识图必须提供 URL 直搜协议（graph.baidu.com/s?image_url=）'
+  );
+  assert.match(baidu.buildDirectUrl('http://x/y.jpg'), /image_url=/);
+  assert.ok(
+    baidu.preferDirect,
+    '百度识图必须 preferDirect —— 走上传路径只会传假文件名，服务端检索不到，' +
+      '但页面却「看起来成功」，靠失败兜底抓不住'
+  );
+});
+
+test('SauceNAO 不能首选 URL 直搜（直搜会触发 Cloudflare 挑战）', async () => {
+  const { AUTO_ENGINE_BY_ID } = await import('../lib/engine-adapters.js');
+  const s = AUTO_ENGINE_BY_ID['saucenao'];
+  assert.ok(s, '缺少 SauceNAO 引擎');
+  assert.ok(
+    !s.preferDirect,
+    'SauceNAO 实测走 multipart 上传可用，直搜反而被 CF 拦；' +
+      '声明 preferDirect 会把能用的引擎弄坏'
+  );
+});
+
+test('引擎必须能区分「首页」与「结果页」', async () => {
+  const { AUTO_ENGINES } = await import('../lib/engine-adapters.js');
+  for (const e of AUTO_ENGINES) {
+    const rc = e.readyCheck || {};
+    assert.ok(
+      rc.selector || rc.minLinks || rc.urlHasQuery || rc.urlIncludes,
+      `${e.id} 缺少区分首页/结果页的判据`
+    );
+  }
+});
+
+test('必须识别「已核查但无匹配」这一有效否定结论', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../background/auto-verify.js', import.meta.url), 'utf8');
+  assert.match(src, /explicitlyNoMatch/, '缺少「已核查未找到匹配」的识别');
+  assert.match(src, /已核查，未找到匹配来源/, '缺少面向用户的说明文案');
+});
+
+test('失败时必须给出可诊断的原因，而不是笼统超时', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../background/auto-verify.js', import.meta.url), 'utf8');
+  assert.match(src, /diagnoseResultPage/, '缺少结果页诊断');
+  assert.match(src, /结果容器未出现|页面内容过少|没有出站链接/, '诊断信息不具体');
+});

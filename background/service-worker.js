@@ -22,7 +22,7 @@ import { generateVisionFacts, generateFactCheckDraft, verifyDraftUrls } from './
 import { runTextFactCheck } from './text-factcheck.js';
 import { VERDICTS } from '../lib/constants.js';
 import { AUTO_ENGINES, AUTO_ENGINE_BY_ID } from '../lib/engine-adapters.js';
-import { newInvestigationId, safeHost, base64ToUint8, uint8ToBase64, sha256Hex } from '../lib/utils.js';
+import { newInvestigationId, safeHost, base64ToUint8, uint8ToBase64, sha256Hex, upgradeToOriginalUrl } from '../lib/utils.js';
 import { putImageBlob } from '../lib/idb-blob-cache.js';
 import { readDimensions, describeAcquisition } from './pick-image.js';
 
@@ -734,7 +734,8 @@ async function handleMessage(msg) {
 
     case 'inv:manual-drop': {
       // 用户手动拖入图片：建立一次新的核查会话
-      return await handleManualDrop(msg.file);
+      // publicUrl 可选：若这张图同时有公网直链，URL 直搜模式的引擎才能用
+      return await handleManualDrop(msg.file, msg.publicUrl || '');
     }
 
     case 'inv:manual-detection': {
@@ -853,7 +854,7 @@ async function handleMessage(msg) {
  * 手动拖入图片：建立一次新的核查会话
  * 与右键触发共用同一套取证流水线，只是图片来源换成本地文件。
  */
-async function handleManualDrop(file) {
+async function handleManualDrop(file, publicUrl = '') {
   const { bytesBase64, fileName, mime } = file || {};
   if (!bytesBase64) throw new Error('未提供图片数据');
 
@@ -901,6 +902,11 @@ async function handleManualDrop(file) {
     inv.image.width = dims.width;
     inv.image.height = dims.height;
     inv.image.notes = '用户手动上传的图片';
+    // 记录公网直链（若有）：URL 直搜模式的引擎需要它
+    if (publicUrl && /^https?:\/\//i.test(publicUrl)) {
+      inv.image.originalUrl = publicUrl;
+      inv.image.normalizedUrl = upgradeToOriginalUrl(publicUrl);
+    }
     // 手动上传同样要有取图自检 —— 用户也需要确认「送进引擎的是我拖进来的那张」
     inv.image.acquisition = describeAcquisition(inv.image, bytesBase64);
 

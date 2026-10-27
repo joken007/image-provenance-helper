@@ -181,14 +181,26 @@ input.dispatchEvent(new Event('change', { bubbles: true }));
 
 ### 6. 哪些引擎可能失败
 
-| 引擎 | 实测情况 |
-| :--- | :--- |
-| SauceNAO | ✅ 稳定，命中即返回结构化结果（已跑通 8 条命中） |
-| IQDB 二次元图库 | ✅ 聚合 Danbooru / Konachan / yande.re / Gelbooru / Sankaku / e-shuushuu / Zerochan / anime-pictures 八个二次元图库 |
-| ASCII2D | ⚠️ 站点有 Cloudflare 挑战，但真实浏览器标签页能过（与 Google Lens 同理） |
-| Bing / 百度 | ⚠️ 页面结构变动较频繁，解析可能需要跟进 |
-| TinEye | ⚠️ Cloudflare JS challenge，机房/代理 IP 常被拦 |
-| Google Lens / Yandex | ❌ 机房 IP 必被验证码拦；**家庭宽带大概率可通过** |
+| 引擎 | 模式 | 实测情况 |
+| :--- | :--- | :--- |
+| SauceNAO | 上传 | ✅ 稳定，命中 9 条 / 涉及 6~8 个站点，4~8 秒。**直搜会触发 CF 挑战，所以必须走 multipart 上传** |
+| 百度识图 | **URL 直搜** | ✅ `graph.baidu.com/s?image_url=`，命中 5 条，3 秒。**走上传路径只会传假文件名** |
+| IQDB 二次元图库 | 上传 | ✅ 聚合 Danbooru / Konachan / yande.re / Gelbooru / Sankaku / e-shuushuu / Zerochan / anime-pictures 八个二次元图库 |
+| ASCII2D | 上传 | ⚠️ 站点有 Cloudflare 挑战，但真实浏览器标签页能过 |
+| TinEye | 上传 | ⚠️ Cloudflare JS challenge，机房 IP 常被拦；已改为「等上传框出现再注入」 |
+| Bing | 上传 | ⚠️ 上传框 id=`sb_fileinput` 且隐藏；真正的入口是 `#sb_brtext`，靠文案匹配会误点「搜索」变成普通网页搜索 |
+| Google Lens / Yandex | 上传 | ❌ 机房 IP 必被验证码拦；**家庭宽带大概率可通过** |
+
+> **两种检索模式**
+> - **上传模式**：DataTransfer 注入字节 → 引擎自己 multipart 提交（SauceNAO 走这条）
+> - **URL 直搜模式**：把图片的公网直链拼进检索地址，服务端自己去取（百度识图走这条）
+>
+> DataTransfer 只改了 `input.files`，**并没有真的把文件传到服务器**。
+> 若引擎是「把文件名传给服务端、服务端自己去取」，就会拿到假文件名而检索落空 ——
+> 百度实测会变成 `?file=query.png`，页面**看起来成功**实则没检索。
+> 因此引擎可显式声明 `preferDirect`（首选直搜），实测哪种好就用哪种。
+
+
 
 被拦时该引擎标记为「需验证码」并跳过，**不影响其它引擎**，也不会编造数据。
 侧栏会给出「手动打开一次」的逃生口——但那只是兜底，不是必需流程。
@@ -401,7 +413,7 @@ ReferenceError: FileReaderSync is not defined
 ## 五、测试
 
 ```bash
-npm test                  # 79 项纯函数单测（Node 内置 test runner）
+npm test                  # 85 项纯函数单测（Node 内置 test runner）
 npm run verify:vendor     # vendor 产物完整性校验（WASM SHA-512 三方比对）
 node test/e2e-smoke.mjs        # 32 项浏览器端真实冒烟测试（Playwright）
 node test/e2e-auto.mjs         # 15 项全自动反搜专项（Playwright）
