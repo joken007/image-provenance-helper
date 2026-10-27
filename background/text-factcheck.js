@@ -193,16 +193,25 @@ export async function runTextFactCheck(postContext, onProgress = () => {}) {
      *
      * 原实现把两者混为一谈，用户看到"未检索到"会误以为"这条消息查无此事"，
      * 而实际上可能只是必应挂了。这是很危险的信息误导。
+     *
+     * 【统计口径按「检索词」而非「检索词 × 引擎」】
+     *   并发策略是「每个检索词按引擎顺序试，第一个有结果就停」，
+     *   所以按 词数×引擎数 算 attempted 会得出"成功 3/6"这种失真数字，
+     *   让用户误以为一半检索失败了。用户真正关心的是：
+     *   我这 3 个检索词，有几个查到了东西。
      */
     const searchFailed = (gathered.failures || []).filter((f) => f.engine !== '-');
-    const engineCount = (options.searchEngines || []).length || 1;
-    const attempted = plan.queries.length * engineCount;
+    const totalQueries = plan.queries.length;
+    const queriesWithResults = plan.queries.filter(
+      (q) => (gathered.byQuery?.[q] || []).length > 0
+    ).length;
+    const queriesFailed = totalQueries - queriesWithResults;
     const allSearchFailed = searchSources.length === 0 && searchFailed.length > 0;
 
     state.searchHealth = {
-      attempted,
-      failed: searchFailed.length,
-      succeeded: attempted - searchFailed.length,
+      totalQueries,
+      queriesWithResults,
+      queriesFailed,
       allFailed: allSearchFailed,
       // 全部失败时给出可操作的提示，而不是笼统的「未检索到」
       diagnosis: allSearchFailed
@@ -228,10 +237,15 @@ export async function runTextFactCheck(postContext, onProgress = () => {}) {
       });
 
       // 该断言自己的来源：本条检索词命中的 + 专业核查库针对它的命中
+      //
+      // 【必须用 queryToClaims 反查，而不是 claimOfQuery[s.query] === claim.id】
+      //   一个检索词可能同时属于多条断言。若只按「等于」匹配，
+      //   共用检索词的那些断言会分不到任何来源，被误判为「未检索到相关来源」。
       const own = allSources.filter(
         (s) =>
-          (s.query && plan.claimOfQuery[s.query] === claim.id) ||
-          (s.engine === 'google-factcheck' && fcHits.some((h) => h.claimId === claim.id && h.reviewUrl === s.url))
+          (s.query && plan.queryToClaims.get(s.query)?.has(claim.id)) ||
+          (s.engine === 'google-factcheck' &&
+            fcHits.some((h) => h.claimId === claim.id && h.reviewUrl === s.url))
       );
 
       const ownGroups = groupByOrigin(own);
@@ -354,12 +368,17 @@ export async function runTextFactCheck(postContext, onProgress = () => {}) {
 /**
  * 把断言与检索词关联起来，并给每个检索词标记归属的断言。
  * 同一个检索词被多条断言共用时只检索一次。
+ *
+ * 【为什么 queryToClaims 是「一对多」】
+ *   两条断言很可能共用同一个检索词（例如都涉及「某新规」）。
+ *   如果把它记成「一个检索词只属于一条断言」，那么另一条断言
+ *   就永远分不到任何来源，会被误判为「未检索到相关来源」——
+ *   这是把「检索到了但没归给它」错报成「查无此事」。
  */
 function buildQueryPlan(claims, options) {
   const maxPerClaim = Math.max(1, Math.min(3, options.maxQueriesPerClaim || 2));
-  const queryOf = new Map();   // query → [claimId]
-  const claimOfQuery = {};     // query → claimId（代表断言）
-  const queriesOfClaim = {};   // claimId → [query]
+  const queryToClaims = new Map(); // query → Set<claimId>（一对多）
+  const queriesOfClaim = {};       // claimId → [query]
 
   for (const claim of claims) {
     const list = [];
@@ -370,18 +389,14 @@ function buildQueryPlan(claims, options) {
       const q = String(kw).trim();
       if (!q) continue;
       list.push(q);
-      if (!queryOf.has(q)) {
-        queryOf.set(q, []);
-        claimOfQuery[q] = claim.id;
-      }
-      queryOf.get(q).push(claim.id);
-      (queriesOfClaim[claim.id] = queriesOfClaim[claim.id] || []).push(q);
+      if (!queryToClaims.has(q)) queryToClaims.set(q, new Set());
+      queryToClaims.get(q).add(claim.id);
     }
-    if (list.length) queriesOfClaim[claim.id] = list;
+    if (list.length) queriesOfClaim[claim.id] = [...new Set(list)];
   }
 
-  const queries = [...queryOf.keys()].slice(0, MAX_TOTAL_QUERIES);
-  return { queries, claimOfQuery, queriesOfClaim };
+  const queries = [...queryToClaims.keys()].slice(0, MAX_TOTAL_QUERIES);
+  return { queries, queryToClaims, queriesOfClaim };
 }
 
 // ---------- 判定聚合 ----------

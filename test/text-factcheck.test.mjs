@@ -481,3 +481,49 @@ test('总结提示词禁止套话并要求写清正确说法', async () => {
   assert.match(TEXT_SUMMARY_SYSTEM_PROMPT, /正确的说法是什么/, '缺少「写出正确说法」的要求');
   assert.match(TEXT_SUMMARY_SYSTEM_PROMPT, /keyNumbers/, '缺少数字核对字段');
 });
+
+// ---------------- 11. 自查发现的回归项 ----------------
+
+test('共用检索词的断言必须都能分到来源（一对多归属）', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../background/text-factcheck.js', import.meta.url), 'utf8');
+  // 必须是 queryToClaims（一对多 Set），不能是「query → 单个 claimId」
+  assert.match(src, /queryToClaims/, '检索词到断言必须是一对多映射');
+  assert.match(
+    src,
+    /queryToClaims\.get\(s\.query\)\?\.has\(claim\.id\)/,
+    '归属判断必须用 Set.has，否则共用检索词的断言会分不到来源、被误判为未检索到'
+  );
+  // 不允许再出现把检索词映射成单值的写法（排除注释行）
+  const codeLines = src
+    .split('\n')
+    .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+    .join('\n');
+  assert.ok(
+    !/claimOfQuery\[s\.query\]\s*===/.test(codeLines),
+    '仍在用单值映射判断归属，共用检索词的断言会漏掉来源'
+  );
+});
+
+test('汇总失败时必须仍有本地兜底总结', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../sidepanel/panel.js', import.meta.url), 'utf8');
+  assert.match(src, /renderLocalSummary/, '缺少本地兜底总结，LLM 汇总失败时用户看不到任何结论');
+});
+
+test('长连接定时器必须幂等且可清理', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../sidepanel/panel.js', import.meta.url), 'utf8');
+  assert.match(src, /if \(keepAlivePort && keepAliveTimer\) return/, '定时器未做幂等保护，侧栏反复开关会叠加');
+  assert.match(src, /function stopKeepAlive/, '缺少清理函数，定时器会泄漏');
+});
+
+test('检索健康度按检索词统计，不按词×引擎', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../background/text-factcheck.js', import.meta.url), 'utf8');
+  assert.match(src, /queriesWithResults/, '未按检索词维度统计，并发后数字会失真');
+  assert.ok(
+    !/attempted\s*=\s*plan\.queries\.length\s*\*\s*engineCount/.test(src),
+    '仍按「词数×引擎数」计算 attempted，并发下会显示失真数字'
+  );
+});

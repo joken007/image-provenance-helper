@@ -36,15 +36,31 @@ const state = {
  *   不再回收它。侧栏一关，端口断开，SW 照常按空闲回收，不留后台常驻。
  */
 let keepAlivePort = null;
+let keepAliveTimer = null;
+let keepAliveRetry = null;
 
 function startKeepAlive() {
+  // 幂等：重复调用不会叠加定时器（侧栏反复开关时旧实现会越积越多）
+  if (keepAlivePort && keepAliveTimer) return;
+
   try {
     keepAlivePort = chrome.runtime.connect({ name: 'keepalive' });
+
     keepAlivePort.onDisconnect.addListener(() => {
       keepAlivePort = null;
-      setTimeout(startKeepAlive, 2000);
+      if (keepAliveTimer) {
+        clearInterval(keepAliveTimer);
+        keepAliveTimer = null;
+      }
+      // 断线重连：只保留一个重试定时器
+      if (keepAliveRetry) clearTimeout(keepAliveRetry);
+      keepAliveRetry = setTimeout(() => {
+        keepAliveRetry = null;
+        startKeepAlive();
+      }, 2000);
     });
-    setInterval(() => {
+
+    keepAliveTimer = setInterval(() => {
       try {
         keepAlivePort?.postMessage({ type: 'ping', t: Date.now() });
       } catch {
@@ -52,9 +68,35 @@ function startKeepAlive() {
       }
     }, 20000);
   } catch {
-    setTimeout(startKeepAlive, 3000);
+    if (keepAliveRetry) clearTimeout(keepAliveRetry);
+    keepAliveRetry = setTimeout(() => {
+      keepAliveRetry = null;
+      startKeepAlive();
+    }, 3000);
   }
 }
+
+/** 侧栏关闭时清理所有定时器，避免残留 */
+function stopKeepAlive() {
+  if (keepAliveTimer) {
+    clearInterval(keepAliveTimer);
+    keepAliveTimer = null;
+  }
+  if (keepAliveRetry) {
+    clearTimeout(keepAliveRetry);
+    keepAliveRetry = null;
+  }
+  try {
+    keepAlivePort?.disconnect();
+  } catch {
+    /* ignore */
+  }
+  keepAlivePort = null;
+  stopElapsedTicker();
+}
+
+window.addEventListener('pagehide', stopKeepAlive);
+window.addEventListener('beforeunload', stopKeepAlive);
 
 document.addEventListener('DOMContentLoaded', async () => {
   bindStaticEvents();
@@ -273,15 +315,56 @@ function renderTextVerdict(tc) {
       </div>
       <div class="text-verdict-meta">
         拆解 ${results.length} 条断言 · 命中 ${sourceCount} 条来源 · 归为 ${groupCount} 个独立来源组
-        ${health.attempted ? ` · 检索成功 ${health.succeeded}/${health.attempted}` : ''}
+        ${
+          health.totalQueries
+            ? ` · 检索词命中 ${health.queriesWithResults}/${health.totalQueries}`
+            : ''
+        }
       </div>
       ${report.headline ? `<div class="text-headline">${escapeHtml(report.headline)}</div>` : ''}
-      ${report.summary ? `<div class="text-summary">${escapeHtml(report.summary)}</div>` : ''}
+      ${report.summary ? `<div class="text-summary">${escapeHtml(report.summary)}</div>` : renderLocalSummary(tc)}
       ${healthWarn}
       ${renderKeyFindings(report)}
       ${renderKeyNumbers(report)}
       ${renderWhatsMissing(report)}
     </div>`;
+}
+
+/**
+ * 本地兜底总结
+ *
+ * 【为什么需要】
+ *   汇总这一步依赖 LLM。若 LLM 调用失败（超时、额度、模型不支持 JSON），
+ *   原来 report 为 null，用户就完全看不到任何总结 —— 明明逐条核查都成功了，
+ *   却只得到一张空白的结论区。这里用程序把已有结果拼成一段话，
+ *   保证「无论如何都有一份具体总结」。
+ */
+function renderLocalSummary(tc) {
+  const results = tc.results || [];
+  if (!results.length) {
+    return '<div class="text-summary">没有可核查的断言，无法给出结论。</div>';
+  }
+
+  const count = (v) => results.filter((r) => r.verdict === v).length;
+  const parts = [];
+  if (count('false')) parts.push(`${count('false')} 条不实`);
+  if (count('misleading')) parts.push(`${count('misleading')} 条误导`);
+  if (count('partial')) parts.push(`${count('partial')} 条部分属实`);
+  if (count('true')) parts.push(`${count('true')} 条属实`);
+  const unknown = count('no-evidence') + count('unverifiable');
+  if (unknown) parts.push(`${unknown} 条证据不足以判定`);
+
+  const unverified = results.filter((r) => r.verdict === 'no-evidence');
+  const missingHint = unverified.length
+    ? `其中 ${unverified.length} 条完全没有检索到相关来源 —— 这不代表它们为假，只说明这次没查到可用的公开来源。`
+    : '';
+
+  return `<div class="text-summary">
+    共核查 ${results.length} 条断言：${parts.join('，') || '无可判定结果'}。${missingHint}
+    <div class="muted small" style="margin-top:6px">
+      （这段总结由程序根据逐条结果直接汇总，未经过模型润色；模型汇总未成功返回。）
+    </div>
+  </div>`;
 }
 
 /**
