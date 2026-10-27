@@ -106,9 +106,10 @@ npm install
 | `exifr` | EXIF / IPTC / XMP 解析 | `vendor/exifr.full.esm.mjs` |
 | `@contentauth/c2pa-wasm` | C2PA 内容凭证验签 | `vendor/c2pa.wasm.js` + `vendor/c2pa_bg.wasm` |
 
-> `vendor/` 不入库（8MB 二进制），由 `npm install` 生成。
-> 跑 `npm run verify:vendor` 可校验产物完整性（WASM SHA-512 三方比对）。
-> 自打包用 `npm run release`。
+> `vendor/` **不入库**（8MB 第三方二进制），由 `npm install` 生成。
+> 校验基准 `scripts/c2pa.sri.txt` **已入库** —— 任何人 clone 后都能跑
+> `npm run verify:vendor` 校验 WASM 是否被替换或损坏（WASM SHA-512 + 绑定层内嵌常量 + SRI 三方比对）。
+> 自打包用 `npm run release`（会先跑完整性校验）。
 
 ### 2. 加载扩展
 

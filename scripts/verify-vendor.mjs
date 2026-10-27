@@ -70,24 +70,36 @@ if (failed) {
 console.log('\n[2/3] WASM SHA-512 与 c2pa.sri.txt 比对');
 
 const wasmPath = join(ROOT, 'vendor/c2pa_bg.wasm');
-const sriPath = join(ROOT, 'vendor/c2pa.sri.txt');
+// SRI 基线优先读仓库内的 scripts/c2pa.sri.txt（入库，作为可信基准），
+// 回落到 vendor/c2pa.sri.txt（npm install 生成的副本）。
+// 这样即便 vendor 未生成，也能用仓库里的基准校验。
+const sriCandidates = [join(ROOT, 'scripts/c2pa.sri.txt'), join(ROOT, 'vendor/c2pa.sri.txt')];
+const sriPath = sriCandidates.find((p) => existsSync(p));
 
-const wasmBytes = readFileSync(wasmPath);
-const actual = createHash('sha512').update(wasmBytes).digest('base64');
+// actual / sriExpected 提到外层：第 3 步（比对 c2pa.wasm.js 内嵌常量）也要用
+let actual = '';
+let sriExpected = '';
 
-// c2pa.sri.txt 形如：sha512-<base64>
-const sriRaw = readFileSync(sriPath, 'utf8').trim();
-const sriExpected = sriRaw.replace(/^sha512-/, '');
-
-if (!sriExpected) {
-  bad('c2pa.sri.txt 内容为空');
-} else if (actual !== sriExpected) {
-  bad('WASM 实际哈希与 c2pa.sri.txt 不一致，文件可能被替换或损坏');
-  info(`记录值：${sriExpected.slice(0, 32)}…`);
-  info(`实际值：${actual.slice(0, 32)}…`);
+if (!sriPath) {
+  bad('找不到 SRI 基线（scripts/c2pa.sri.txt 或 vendor/c2pa.sri.txt）');
 } else {
-  ok('WASM 哈希与 c2pa.sri.txt 一致');
-  info(`sha512-${actual.slice(0, 32)}…`);
+  const wasmBytes = readFileSync(wasmPath);
+  actual = createHash('sha512').update(wasmBytes).digest('base64');
+
+  // c2pa.sri.txt 形如：sha512-<base64>
+  const sriRaw = readFileSync(sriPath, 'utf8').trim();
+  sriExpected = sriRaw.replace(/^sha512-/, '');
+
+  if (!sriExpected) {
+    bad('c2pa.sri.txt 内容为空');
+  } else if (actual !== sriExpected) {
+    bad('WASM 实际哈希与 SRI 基线不一致，文件可能被替换或损坏');
+    info(`记录值：${sriExpected.slice(0, 32)}…`);
+    info(`实际值：${actual.slice(0, 32)}…`);
+  } else {
+    ok('WASM 哈希与 SRI 基线一致');
+    info(`sha512-${actual.slice(0, 32)}…`);
+  }
 }
 
 // ---------- 3. c2pa.wasm.js 内嵌常量比对 ----------
