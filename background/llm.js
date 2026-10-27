@@ -10,10 +10,18 @@ import { loadOptions } from './store.js';
 import {
   FACTS_SYSTEM_PROMPT,
   DRAFT_SYSTEM_PROMPT,
+  CLAIMS_SYSTEM_PROMPT,
+  VERIFY_SYSTEM_PROMPT,
+  TEXT_SUMMARY_SYSTEM_PROMPT,
   buildFactsUserPrompt,
   buildDraftUserPrompt,
+  buildClaimsUserPrompt,
+  buildVerifyUserPrompt,
+  buildTextSummaryUserPrompt,
   emptyFacts,
   emptyDraft,
+  emptyClaims,
+  emptyTextReport,
 } from '../lib/prompts.js';
 import { VERDICTS } from '../lib/constants.js';
 
@@ -173,13 +181,185 @@ export function verifyDraftUrls(inv, draft) {
   return { draft: cleaned, blockedSources: [...new Set(blocked)] };
 }
 
+// ---------- 文本链路：断言拆解 / 逐条核查 / 汇总 ----------
+
+/**
+ * 第一段：把帖文正文拆成可独立核查的断言
+ * @param {object} postContext {text, platform, title, author, publishedAt, url}
+ */
+export async function decomposeClaims(postContext) {
+  const options = await loadOptions();
+  if (!options.llmBaseUrl) throw new Error('未配置 LLM 接口地址（请到扩展选项页填写）');
+  if (!options.llmTextModel) throw new Error('未配置文本模型名称');
+
+  const body = {
+    model: options.llmTextModel,
+    messages: [
+      { role: 'system', content: CLAIMS_SYSTEM_PROMPT },
+      {
+        role: 'user',
+        content: buildClaimsUserPrompt({
+          text: postContext?.text || '',
+          platform: postContext?.platform?.name || postContext?.platform || '',
+          title: postContext?.pageTitle || postContext?.title || '',
+          author: postContext?.author || '',
+          publishedAt: postContext?.publishedAt || '',
+          pageUrl: postContext?.url || '',
+        }),
+      },
+    ],
+    temperature: 0.1,
+    response_format: { type: 'json_object' },
+  };
+
+  const raw = await callChatJson(options, body);
+  return normalizeClaims(raw);
+}
+
+/**
+ * 第二段：基于本次真实检索到的来源，逐条判定断言
+ * @param {object} claim {text, keywords, type}
+ * @param {Array}  sources [{title, url, snippet}]
+ */
+export async function verifyClaim(claim, sources) {
+  const options = await loadOptions();
+  if (!options.llmBaseUrl) throw new Error('未配置 LLM 接口地址（请到扩展选项页填写）');
+  if (!options.llmTextModel) throw new Error('未配置文本模型名称');
+
+  const body = {
+    model: options.llmTextModel,
+    messages: [
+      { role: 'system', content: VERIFY_SYSTEM_PROMPT },
+      {
+        role: 'user',
+        content: buildVerifyUserPrompt({
+          claim: claim?.text || '',
+          keywords: claim?.keywords || [],
+          sources: sources || [],
+        }),
+      },
+    ],
+    temperature: 0.1,
+    response_format: { type: 'json_object' },
+  };
+
+  const raw = await callChatJson(options, body);
+  return normalizeVerdict(raw);
+}
+
+/**
+ * 第三段：汇总成核查报告
+ * @param {Array}  results 逐条核查结果
+ * @param {Array}  sources 本次检索到的全部来源
+ * @param {object} meta    {platform, pageUrl, queries, checkedAt}
+ */
+export async function summarizeTextCheck(results, sources, meta = {}) {
+  const options = await loadOptions();
+  if (!options.llmBaseUrl) throw new Error('未配置 LLM 接口地址（请到扩展选项页填写）');
+  if (!options.llmTextModel) throw new Error('未配置文本模型名称');
+
+  const body = {
+    model: options.llmTextModel,
+    messages: [
+      { role: 'system', content: TEXT_SUMMARY_SYSTEM_PROMPT },
+      {
+        role: 'user',
+        content: buildTextSummaryUserPrompt({
+          results: results || [],
+          sources: sources || [],
+          queries: meta.queries || [],
+          platform: meta.platform || '',
+          pageUrl: meta.pageUrl || '',
+          checkedAt: meta.checkedAt || new Date().toISOString().slice(0, 10),
+        }),
+      },
+    ],
+    temperature: 0.2,
+    response_format: { type: 'json_object' },
+  };
+
+  const raw = await callChatJson(options, body);
+  return normalizeTextReport(raw);
+}
+
+// ---------- 结构归一化 ----------
+
+function normalizeClaims(raw) {
+  const base = emptyClaims();
+  const r = raw || {};
+  const claims = Array.isArray(r.claims)
+    ? r.claims
+        .filter((c) => c && typeof c.text === 'string' && c.text.trim())
+        .slice(0, 6)
+        .map((c, i) => ({
+          id: `c${i + 1}`,
+          text: str(c.text),
+          keywords: arr(c.keywords).slice(0, 3),
+          type: str(c.type) || '其他',
+        }))
+    : [];
+  return { claims, unverifiable: arr(r.unverifiable) };
+}
+
+function normalizeVerdict(raw) {
+  const r = raw || {};
+  const valid = ['true', 'false', 'partial', 'misleading', 'unverifiable', 'no-evidence'];
+  const verdict = valid.includes(str(r.verdict)) ? str(r.verdict) : 'unverifiable';
+  const evidence = Array.isArray(r.evidence)
+    ? r.evidence
+        .filter((e) => e && (e.quote || e.url))
+        .map((e) => ({
+          quote: str(e.quote),
+          url: str(e.url),
+          stance: ['supports', 'refutes', 'neutral'].includes(str(e.stance)) ? str(e.stance) : 'neutral',
+        }))
+    : [];
+  return {
+    verdict,
+    // 【重要】confidence 不再由模型自报——实测模型自评置信度并不可靠，
+    // 改由 lib/source-trust.js 按「独立来源组的一致率」计算。
+    reasoning: str(r.reasoning),
+    evidence,
+    missing: arr(r.missing),
+  };
+}
+
+function normalizeTextReport(raw) {
+  const base = emptyTextReport();
+  const r = raw || {};
+  const valid = ['true', 'false', 'partial', 'misleading', 'unverifiable', 'no-evidence'];
+  const sources = Array.isArray(r.sources)
+    ? r.sources
+        .filter((s) => s && (s.url || s.label))
+        .map((s) => ({ label: str(s.label) || '来源', url: str(s.url) }))
+    : [];
+  const claimResults = Array.isArray(r.claimResults)
+    ? r.claimResults
+        .filter((c) => c && c.claim)
+        .map((c) => ({
+          claim: str(c.claim),
+          verdict: valid.includes(str(c.verdict)) ? str(c.verdict) : 'unverifiable',
+          reasoning: str(c.reasoning),
+        }))
+    : [];
+  return {
+    verdict: valid.includes(str(r.verdict)) ? str(r.verdict) : base.verdict,
+    headline: str(r.headline),
+    summary: str(r.summary),
+    process: arr(r.process),
+    claimResults,
+    sources,
+    checkedAt: str(r.checkedAt),
+  };
+}
+
 // ---------- HTTP 调用与容错解析 ----------
 
 /**
  * 调用 chat completions 并解析出 JSON
  * 自动处理：400 时去掉 response_format 重试；<think> 剥离；Markdown 代码块剥离
  */
-async function callChatJson(options, body) {
+export async function callChatJson(options, body) {
   const url = normalizeEndpoint(options.llmBaseUrl);
   const headers = {
     'Content-Type': 'application/json',

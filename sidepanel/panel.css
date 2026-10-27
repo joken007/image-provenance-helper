@@ -727,3 +727,273 @@ button:disabled {
   padding: 0 5px;
   margin-right: 5px;
 }
+
+/* ============================================================
+   文本事实核查
+   设计目标：让「核查过程」一眼看得懂——做了什么、依据什么、
+   哪些来源被认定为同源转载、哪一环还缺证据。
+   ============================================================ */
+
+.text-verdict {
+  margin-top: 12px;
+  padding: 12px 14px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.text-verdict-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.text-verdict-head strong {
+  font-size: 16px;
+}
+
+.text-verdict-meta {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.text-headline {
+  margin-top: 8px;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.text-summary {
+  margin-top: 6px;
+  color: var(--text);
+  line-height: 1.65;
+}
+
+/* 判定配色：属实=绿，不实=红，其余按语义区分 */
+.vt-true { color: var(--ok); }
+.vt-false { color: var(--strong); }
+.vt-partial { color: var(--weak); }
+.vt-misleading { color: var(--weak); }
+.vt-no-evidence { color: var(--muted); }
+.vt-unverifiable { color: var(--muted); }
+
+.verdict-tag {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  background: #e2e8f0;
+  color: var(--text);
+}
+.verdict-tag.vt-true { background: var(--ok-bg); color: var(--ok); }
+.verdict-tag.vt-false { background: var(--strong-bg); color: var(--strong); }
+.verdict-tag.vt-partial { background: var(--weak-bg); color: var(--weak); }
+.verdict-tag.vt-misleading { background: var(--weak-bg); color: var(--weak); }
+.verdict-tag.vt-no-evidence,
+.verdict-tag.vt-unverifiable { background: #f1f5f9; color: var(--muted); }
+
+.conf-tag {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: #f1f5f9;
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+.conf-high { background: var(--ok-bg); color: var(--ok); border-color: #bbf7d0; }
+.conf-medium { background: var(--weak-bg); color: var(--weak); border-color: #fde68a; }
+.conf-low { background: var(--strong-bg); color: var(--strong); border-color: #fecaca; }
+
+.forced-tag {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: #ede9fe;
+  color: #6d28d9;
+  border: 1px solid #ddd6fe;
+}
+
+.text-progress {
+  margin-top: 12px;
+  padding: 12px 14px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.text-error {
+  margin-top: 12px;
+  padding: 12px 14px;
+  background: var(--strong-bg);
+  border: 1px solid #fecaca;
+  border-radius: var(--radius);
+  color: var(--strong);
+}
+
+.text-sub-head {
+  margin: 16px 0 8px;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--brand);
+}
+
+.text-process {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.text-process li {
+  margin-bottom: 4px;
+  line-height: 1.6;
+}
+
+.text-source-detail {
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+.text-source-detail summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.text-raw {
+  margin-top: 8px;
+  padding: 10px;
+  background: #f8fafc;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 260px;
+  overflow: auto;
+  color: var(--text);
+}
+
+/* ---------- 逐条断言 ---------- */
+
+.text-claim {
+  margin-bottom: 10px;
+  padding: 12px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.text-claim-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.text-claim-body {
+  font-weight: 600;
+  line-height: 1.6;
+  margin-bottom: 6px;
+}
+
+.text-claim-meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.text-claim-reason {
+  margin-top: 6px;
+  line-height: 1.65;
+}
+
+.text-evidence {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+}
+
+.text-evidence .text-sub-head {
+  margin: 0 0 6px;
+  font-size: 12px;
+}
+
+.text-ev-list {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.text-ev-list li {
+  margin-bottom: 6px;
+  line-height: 1.6;
+}
+
+.ev-quote {
+  color: var(--text);
+}
+
+.ev-stance {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+.stance-supports { background: var(--ok-bg); color: var(--ok); }
+.stance-refutes { background: var(--strong-bg); color: var(--strong); }
+.stance-neutral { background: #f1f5f9; color: var(--muted); }
+
+.text-missing {
+  margin-top: 6px;
+  padding: 6px 8px;
+  background: var(--weak-bg);
+  border: 1px solid #fde68a;
+  border-radius: 6px;
+  color: var(--weak);
+  font-size: 12px;
+}
+
+/* ---------- 来源 ---------- */
+
+.text-syndication {
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  background: var(--weak-bg);
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+  color: var(--weak);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.text-src-list {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.text-src-list li {
+  margin-bottom: 8px;
+  line-height: 1.5;
+}
+
+.text-src-snip {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.text-failures {
+  margin-top: 8px;
+  padding: 6px 8px;
+  background: #f8fafc;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}

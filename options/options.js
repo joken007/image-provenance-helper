@@ -1,6 +1,7 @@
 // options/options.js —— 扩展设置页
 
 import { AUTO_ENGINES } from '../lib/engine-adapters.js';
+import { SEARCH_ENGINES, DEFAULT_SEARCH_ENGINES } from '../background/web-search.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -23,11 +24,25 @@ async function load() {
   $('watermark').value = o.watermark || '';
   $('autoOpenEngines').checked = o.autoOpenEngines !== false;
 
+  // 文本核查相关
+  $('maxSourcesPerQuery').value = o.maxSourcesPerQuery || 8;
+  $('maxClaims').value = o.maxClaims || 6;
+  $('maxQueriesPerClaim').value = o.maxQueriesPerClaim || 2;
+  $('factCheckApiKey').value = o.factCheckApiKey || '';
+
   const enabled = new Set(o.autoEngines || o.enabledEngines || AUTO_ENGINES.map((e) => e.id));
   $('engine-checks').innerHTML = AUTO_ENGINES.map(
     (e) =>
       `<label><input type="checkbox" data-engine="${e.id}" ${
         enabled.has(e.id) ? 'checked' : ''
+      } /> ${e.name}</label>`
+  ).join('');
+
+  const searchEnabled = new Set(o.searchEngines || DEFAULT_SEARCH_ENGINES);
+  $('search-engine-checks').innerHTML = SEARCH_ENGINES.map(
+    (e) =>
+      `<label><input type="checkbox" data-search-engine="${e.id}" ${
+        searchEnabled.has(e.id) ? 'checked' : ''
       } /> ${e.name}</label>`
   ).join('');
 }
@@ -36,6 +51,16 @@ async function save() {
   const enabledEngines = [...document.querySelectorAll('[data-engine]')]
     .filter((c) => c.checked)
     .map((c) => c.dataset.engine);
+
+  const searchEngines = [...document.querySelectorAll('[data-search-engine]')]
+    .filter((c) => c.checked)
+    .map((c) => c.dataset.searchEngine);
+
+  const num = (id, fallback, min, max) => {
+    const v = parseInt($(id).value, 10);
+    if (!Number.isFinite(v)) return fallback;
+    return Math.max(min, Math.min(max, v));
+  };
 
   const patch = {
     llmBaseUrl: $('llmBaseUrl').value.trim(),
@@ -48,6 +73,12 @@ async function save() {
     autoOpenEngines: $('autoOpenEngines').checked,
     autoEngines: enabledEngines,
     enabledEngines, // 兼容旧字段
+    // 文本事实核查
+    searchEngines,
+    maxSourcesPerQuery: num('maxSourcesPerQuery', 8, 1, 20),
+    maxClaims: num('maxClaims', 6, 1, 6),
+    maxQueriesPerClaim: num('maxQueriesPerClaim', 2, 1, 3),
+    factCheckApiKey: $('factCheckApiKey').value.trim(),
   };
 
   const res = await send({ type: 'inv:save-options', patch });

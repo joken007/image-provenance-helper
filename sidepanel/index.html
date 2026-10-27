@@ -44,6 +44,35 @@
 
     <!-- 证据卡 -->
     <section id="result-state" class="result hidden">
+      <!-- 文本事实核查（始终可见：与图像链路共用同一会话，可同屏对照） -->
+      <div class="card" id="text-check-card">
+        <div class="card-head">
+          <h3>文本事实核查</h3>
+          <span id="text-status" class="muted small"></span>
+        </div>
+
+        <div class="row">
+          <button id="btn-text-check" class="primary-btn">核查当前页面文本</button>
+          <span class="muted small">或在网页上右键 →「核查这段文字」（框选后更精准）</span>
+        </div>
+
+        <div id="text-empty" class="muted small">尚未进行文本核查。</div>
+
+        <div id="text-body" class="hidden">
+          <!-- 总体结论 -->
+          <div id="text-verdict-box"></div>
+          <!-- 核查过程 -->
+          <div id="text-process-box"></div>
+          <!-- 逐条断言 -->
+          <div id="text-claims-box"></div>
+          <!-- 来源与提示 -->
+          <div id="text-sources-box"></div>
+          <div id="text-blocked" class="blocked hidden"></div>
+        </div>
+      </div>
+
+      <!-- 图像链路（没有图片时整体隐藏，避免显示无关的空卡片） -->
+      <div id="image-flow">
       <!-- 结论条 -->
       <div id="verdict-banner" class="verdict-banner">
         <div class="verdict-left">
@@ -178,6 +207,8 @@
           </div>
         </div>
       </div>
+
+      </div><!-- /image-flow -->
 
       <!-- 历史 -->
       <div class="card" id="history-card">

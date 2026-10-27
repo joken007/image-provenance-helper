@@ -129,6 +129,18 @@ export function defaultOptions() {
     autoEngines: ['saucenao', 'tineye', 'bing', 'baidu', 'yandex', 'google-lens'],
     // 兼容旧字段
     enabledEngines: ['saucenao', 'tineye', 'bing', 'baidu', 'yandex', 'google-lens'],
+    // ---- 文本事实核查 ----
+    // 联网检索用哪些搜索引擎（对应 background/web-search.js 的 SEARCH_ENGINES）
+    searchEngines: ['bing-cn', 'duckduckgo'],
+    // 每个检索词最多保留几条来源
+    maxSourcesPerQuery: 8,
+    // 一次核查最多拆解几条断言（上限 6，与提示词一致）
+    maxClaims: 6,
+    // 每条断言最多用几个检索词
+    maxQueriesPerClaim: 2,
+    // Google Fact Check Tools API Key：查「是否已被专业机构核查过」
+    // 只作辅助线索，未命中不代表断言为假
+    factCheckApiKey: '',
     // 其它
     watermark: '@图片溯源核查笔记',
     autoOpenEngines: true,

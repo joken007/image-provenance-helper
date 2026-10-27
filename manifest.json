@@ -38,6 +38,12 @@
       "js": ["content/page-probe.js"],
       "run_at": "document_idle",
       "all_frames": true
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content/text-probe.js"],
+      "run_at": "document_idle",
+      "all_frames": false
     }
   ],
   "content_security_policy": {
@@ -47,6 +53,10 @@
     "investigate-primary-image": {
       "suggested_key": { "default": "Alt+Shift+S" },
       "description": "核查当前页面主图"
+    },
+    "investigate-page-text": {
+      "suggested_key": { "default": "Alt+Shift+T" },
+      "description": "核查当前页面的文本内容"
     }
   },
   "icons": {

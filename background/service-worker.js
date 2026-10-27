@@ -19,6 +19,7 @@ import { runAiDetection, manualDetection } from './detection.js';
 import { evaluateSignals, canUseQuickTemplates } from './score.js';
 import { saveSessionInvestigation, patchSessionInvestigation, persistInvestigation, loadSessionInvestigation, loadOptions, saveOptions, listHistory, loadHistoryItem, deleteHistoryItem } from './store.js';
 import { generateVisionFacts, generateFactCheckDraft, verifyDraftUrls } from './llm.js';
+import { runTextFactCheck } from './text-factcheck.js';
 import { VERDICTS } from '../lib/constants.js';
 import { AUTO_ENGINES, AUTO_ENGINE_BY_ID } from '../lib/engine-adapters.js';
 import { newInvestigationId, safeHost, base64ToUint8, uint8ToBase64, sha256Hex } from '../lib/utils.js';
@@ -27,28 +28,31 @@ import { readDimensions } from './pick-image.js';
 
 // ---------- 安装与菜单 ----------
 
-chrome.runtime.onInstalled.addListener(() => {
-  // 点击工具栏图标直接打开 Side Panel，无需冗余的 popup
-  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
-
+/** 统一的右键菜单注册（安装与浏览器启动时都要做一次） */
+function registerContextMenus() {
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
       id: 'investigate-image',
       title: '使用「辟谣助手」核查此图片',
       contexts: ['image', 'page', 'frame'],
     });
+    chrome.contextMenus.create({
+      id: 'investigate-text',
+      title: '使用「辟谣助手」核查这段文字',
+      contexts: ['selection', 'page'],
+    });
   });
+}
+
+chrome.runtime.onInstalled.addListener(() => {
+  // 点击工具栏图标直接打开 Side Panel，无需冗余的 popup
+  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+  registerContextMenus();
 });
 
 // SW 可能在不重启浏览器的情况下被回收再唤醒，需补注册一次菜单
 chrome.runtime.onStartup.addListener(() => {
-  chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({
-      id: 'investigate-image',
-      title: '使用「辟谣助手」核查此图片',
-      contexts: ['image', 'page', 'frame'],
-    });
-  });
+  registerContextMenus();
 });
 
 // 也用 action 点击作为「核查当前页面主图」的入口
@@ -67,10 +71,16 @@ chrome.action.onClicked.addListener(async (tab) => {
 });
 
 chrome.commands.onCommand.addListener(async (command) => {
-  if (command !== 'investigate-primary-image') return;
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id) return;
   await chrome.sidePanel.open({ windowId: tab.windowId }).catch(() => {});
+
+  if (command === 'investigate-page-text') {
+    runTextPipeline({ tabId: tab.id, windowId: tab.windowId, selectionText: '' });
+    return;
+  }
+  if (command !== 'investigate-primary-image') return;
+
   runInvestigationPipeline({
     tabId: tab.id,
     windowId: tab.windowId,
@@ -85,7 +95,24 @@ chrome.commands.onCommand.addListener(async (command) => {
 // ---------- 右键菜单触发 ----------
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
-  if (info.menuItemId !== 'investigate-image' || !tab?.id) return;
+  if (!tab?.id) return;
+
+  // 文本核查
+  if (info.menuItemId === 'investigate-text') {
+    // 【关键】必须在任何 await 之前同步调用 sidePanel.open，否则丢失用户手势报错
+    chrome.sidePanel.open({ windowId: tab.windowId }).catch(() => {});
+    runTextPipeline({
+      tabId: tab.id,
+      windowId: tab.windowId,
+      frameId: info.frameId ?? 0,
+      selectionText: info.selectionText || '',
+      pageUrl: info.pageUrl || tab.url || '',
+      pageTitle: tab.title || '',
+    });
+    return;
+  }
+
+  if (info.menuItemId !== 'investigate-image') return;
 
   // 【关键】必须在任何 await 之前同步调用 sidePanel.open，否则丢失用户手势报错
   chrome.sidePanel.open({ windowId: tab.windowId }).catch(() => {});
@@ -106,10 +133,16 @@ async function runInvestigationPipeline(ctx) {
   const id = newInvestigationId();
   const now = new Date().toISOString();
 
+  // 【文图一体】若当前会话已有文本核查结果，带到新的图像核查里，
+  // 这样同一条社交内容的「文字证据」与「图像证据」能在侧栏同屏对照。
+  const prev = await loadSessionInvestigation();
+  const carriedTextCheck = prev?.textCheck || null;
+
   let inv = {
     id,
-    schemaVersion: 2,
+    schemaVersion: 3,
     status: 'collecting',
+    kind: carriedTextCheck ? 'both' : 'image',
     createdAt: now,
     updatedAt: now,
     image: {
@@ -134,6 +167,8 @@ async function runInvestigationPipeline(ctx) {
     systemSuggestion: VERDICTS.UNDETERMINED,
     manual: { verdict: null, confidence: null, claimText: ctx.pageTitle || '', notes: '' },
   };
+
+  if (carriedTextCheck) inv.textCheck = carriedTextCheck;
 
   // 1) 先写入 collecting 初始状态，侧栏打开即刻读到骨架，零消息丢失
   await saveSessionInvestigation(inv);
@@ -187,6 +222,166 @@ async function runInvestigationPipeline(ctx) {
     inv.updatedAt = new Date().toISOString();
     await saveSessionInvestigation(inv);
   }
+}
+
+/**
+ * 文本事实核查主流程
+ *
+ * 【与图像链路的关系】
+ *   共用同一个会话记录：先核查文字、再核查同一条内容的配图，两份证据在侧栏同屏展示，
+ *   构成「文图一体」的证据链。反过来（先图后文）同样成立。
+ *
+ * 【为什么要 fire-and-forget】
+ *   文本核查要走「拆解 → 多次联网检索 → 逐条判定 → 汇总」，耗时可达一两分钟。
+ *   不能占住右键菜单的调用栈，否则浏览器会认为用户手势失效、侧栏也打不开。
+ *   因此后台跑，每完成一个阶段就增量回写 storage.session，侧栏实时刷新。
+ */
+async function runTextPipeline(ctx) {
+  const now = new Date().toISOString();
+
+  // 1) 取帖文正文上下文
+  const post = await fetchPostContext(ctx);
+
+  // 2) 准备会话：有会话就复用（文图一体），没有就新建
+  let inv = await loadSessionInvestigation();
+  if (!inv) {
+    inv = {
+      id: newInvestigationId(),
+      schemaVersion: 3,
+      status: 'collecting',
+      kind: 'text',
+      createdAt: now,
+      updatedAt: now,
+      image: {
+        originalUrl: '',
+        normalizedUrl: '',
+        canDirectLink: false,
+        pageUrl: ctx.pageUrl || '',
+        pageTitle: ctx.pageTitle || '',
+        pageSite: safeHost(ctx.pageUrl || ''),
+        width: 0,
+        height: 0,
+        mime: 'image/jpeg',
+        sha256: '',
+        acquiredVia: 'text-check',
+      },
+      engines: [],
+      exif: { present: false, rawTagCount: 0 },
+      c2pa: { status: 'absent', method: 'jumbf-scan', note: '文本核查不涉及内容凭证' },
+      detection: [],
+      timeline: {},
+      signals: [],
+      systemSuggestion: VERDICTS.UNDETERMINED,
+      manual: { verdict: null, confidence: null, claimText: '', notes: '' },
+    };
+  } else {
+    inv.kind = inv.kind === 'image' ? 'both' : inv.kind || 'text';
+  }
+
+  inv.textCheck = {
+    status: post?.ok ? 'running' : 'failed',
+    stage: post?.ok ? 'starting' : 'failed',
+    note: post?.ok ? '正在准备联网取证…' : post?.error || '未能读取页面内容',
+    startedAt: now,
+    source: post?.ok
+      ? {
+          platform: post.platform?.name || post.platform || '',
+          platformId: post.platform?.id || '',
+          url: post.url || '',
+          title: post.pageTitle || post.title || '',
+          author: post.author || '',
+          publishedAt: post.publishedAt || '',
+          text: post.text || '',
+          strategy: post.strategy || '',
+          note: post.note || '',
+          images: post.images || [],
+        }
+      : null,
+    claims: [],
+    queries: [],
+    sources: [],
+    groups: [],
+    results: [],
+    report: null,
+    blockedSources: [],
+    factCheck: { available: false, note: '', hits: [] },
+    failures: [],
+    updatedAt: now,
+  };
+
+  await saveSessionInvestigation(inv);
+
+  if (!post?.ok) {
+    inv.textCheck.finishedAt = new Date().toISOString();
+    await saveSessionInvestigation(inv);
+    return;
+  }
+
+  // 3) 后台跑四段管线，进度实时回写
+  const invId = inv.id;
+  runTextFactCheck(post, async (state) => {
+    const cur = await loadSessionInvestigation();
+    if (!cur || cur.id !== invId) return;
+    await saveSessionInvestigation({
+      ...cur,
+      textCheck: state,
+      updatedAt: new Date().toISOString(),
+    });
+  });
+}
+
+/**
+ * 从目标标签页取帖文正文
+ *
+ * 【为什么要现场注入一次内容脚本】
+ *   扩展装好之后，用户已经打开的页面里并没有 content/text-probe.js（内容脚本只在加载时注入）。
+ *   此时直接 sendMessage 会报 "Receiving end does not exist"。
+ *   所以先试一次，失败就把脚本注入进去再试。
+ */
+async function fetchPostContext(ctx) {
+  let post = null;
+
+  try {
+    post = await chrome.tabs.sendMessage(ctx.tabId, { type: 'probe:get-post-context' });
+  } catch {
+    post = null;
+  }
+
+  if (!post) {
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: ctx.tabId, allFrames: false },
+        files: ['content/text-probe.js'],
+      });
+      post = await chrome.tabs.sendMessage(ctx.tabId, { type: 'probe:get-post-context' });
+    } catch {
+      post = null;
+    }
+  }
+
+  if (!post || post.ok === false) {
+    return {
+      ok: false,
+      error:
+        (post && post.error) ||
+        '无法读取页面内容：当前页面可能禁止扩展访问，或没有可核查的文本。请尝试框选要核查的那段文字后重试。',
+    };
+  }
+
+  // 用户框选的文字优先于自动抽取的正文 —— 这才是「某一条社群内容」的精确指向
+  const sel = String(ctx.selectionText || '').trim();
+  if (sel.length >= 8) {
+    return {
+      ...post,
+      ok: true,
+      strategy: 'selection',
+      text: sel.slice(0, 6000),
+      selection: sel.slice(0, 6000),
+      note: '使用你框选的文字作为核查对象',
+    };
+  }
+
+  return { ...post, ok: true };
 }
 
 /**
@@ -559,6 +754,21 @@ async function handleMessage(msg) {
       if (!inv) throw new Error('当前没有进行中的核查');
       const { blockedSources, cleaned } = verifyDraftUrls(inv, msg.draft || inv.article?.draft);
       return { blockedSources, cleaned };
+    }
+
+    case 'text:check-active-tab': {
+      // 侧栏按钮入口：对当前活动标签页发起文本核查
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab?.id) throw new Error('找不到当前标签页');
+      await chrome.sidePanel.open({ windowId: tab.windowId }).catch(() => {});
+      runTextPipeline({
+        tabId: tab.id,
+        windowId: tab.windowId,
+        selectionText: '',
+        pageUrl: tab.url || '',
+        pageTitle: tab.title || '',
+      });
+      return { ok: true };
     }
 
     case 'history:list': {

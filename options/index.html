@@ -83,6 +83,40 @@
     </div>
 
     <div class="card">
+      <h2>文本事实核查 · 联网取证</h2>
+      <div class="field">
+        <span>搜索引擎</span>
+        <div class="engines" id="search-engine-checks"></div>
+        <div class="hint">按顺序依次使用，第一个失败会自动切到下一个。检索在后台不可见标签页里进行，查完即关。</div>
+      </div>
+      <div class="field">
+        <span>每个检索词保留多少条来源</span>
+        <input id="maxSourcesPerQuery" type="number" min="1" max="20" step="1" />
+      </div>
+      <div class="field">
+        <span>一次核查最多拆解多少条断言</span>
+        <input id="maxClaims" type="number" min="1" max="6" step="1" />
+        <div class="hint">上限 6。断言越多耗时越长，也越容易稀释重点。</div>
+      </div>
+      <div class="field">
+        <span>每条断言最多用几个检索词</span>
+        <input id="maxQueriesPerClaim" type="number" min="1" max="3" step="1" />
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>专业核查库（仅辅助线索）</h2>
+      <div class="field">
+        <span>Google Fact Check Tools API Key</span>
+        <input id="factCheckApiKey" type="password" placeholder="（可留空）" />
+        <div class="hint">
+          用于查询「这条断言是否已被专业机构核查过」。留空则跳过。
+          <b>注意</b>：它只返回别人查过的记录，查不到不代表断言为真；并且只作辅助，不能作为唯一依据。
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
       <h2>其它</h2>
       <div class="field">
         <span>辟谣图右下角水印</span>

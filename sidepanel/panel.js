@@ -7,7 +7,7 @@
 //
 // 注意：图片原始字节只在 IndexedDB 里，本文件不碰 chrome.storage 的图片数据。
 
-import { ENGINES, VERDICT_LABEL, VERDICTS, C2PA_VERIFY_PAGE } from '../lib/constants.js';
+import { ENGINES, VERDICT_LABEL, VERDICTS, C2PA_VERIFY_PAGE, TEXT_VERDICT_LABEL } from '../lib/constants.js';
 import { getImageBlob } from '../lib/idb-blob-cache.js';
 import { verifyC2pa } from './c2pa-verifier.js';
 import { renderFactCheckCard, downloadCanvas } from './card-renderer.js';
@@ -92,6 +92,10 @@ function render() {
   $('loading-state').classList.add('hidden');
   $('result-state').classList.remove('hidden');
 
+  // 纯文本会话不显示图像链路的卡片（那些卡片在没有图片时全是无关空信息）
+  $('image-flow').classList.toggle('hidden', inv.kind === 'text');
+
+  renderTextCheck(inv);
   renderVerdict(inv);
   renderImage(inv);
   renderEngines(inv);
@@ -115,6 +119,228 @@ function renderLoading(inv) {
   $('loading-steps').innerHTML = steps
     .map((s) => `<li class="${s.done ? 'done' : 'doing'}">${s.label}</li>`)
     .join('');
+}
+
+// ---------- 文本事实核查渲染 ----------
+
+/** 置信度文案 */
+const CONF_LABEL = { high: '高', medium: '中', low: '低', none: '无' };
+/** 置信度强弱序（用于取最弱一环） */
+const CONF_ORDER = { high: 3, medium: 2, low: 1, none: 0 };
+/** 证据立场文案 */
+const STANCE_LABEL = { supports: '支持', refutes: '反驳', neutral: '背景' };
+
+function renderTextCheck(inv) {
+  const tc = inv.textCheck;
+  const statusEl = $('text-status');
+
+  if (!tc) {
+    statusEl.textContent = '';
+    $('text-empty').classList.remove('hidden');
+    $('text-body').classList.add('hidden');
+    return;
+  }
+
+  $('text-empty').classList.add('hidden');
+  $('text-body').classList.remove('hidden');
+
+  const statusText = { running: '核查中', done: '已完成', failed: '失败' }[tc.status] || tc.status || '';
+  statusEl.textContent = tc.note ? `${statusText} · ${tc.note}` : statusText;
+
+  if (tc.status === 'running') {
+    $('text-verdict-box').innerHTML =
+      `<div class="text-progress"><span class="spin-dot"></span>${escapeHtml(tc.note || '正在核查…')}</div>`;
+    $('text-process-box').innerHTML = '';
+    $('text-claims-box').innerHTML = '';
+    $('text-sources-box').innerHTML = '';
+    $('text-blocked').classList.add('hidden');
+    return;
+  }
+
+  if (tc.status === 'failed') {
+    $('text-verdict-box').innerHTML = `<div class="text-error">${escapeHtml(tc.note || '核查失败')}</div>`;
+    $('text-process-box').innerHTML = '';
+    $('text-claims-box').innerHTML = '';
+    $('text-sources-box').innerHTML = '';
+    $('text-blocked').classList.add('hidden');
+    return;
+  }
+
+  renderTextVerdict(tc);
+  renderTextProcess(tc);
+  renderTextClaims(tc);
+  renderTextSources(tc);
+}
+
+function renderTextVerdict(tc) {
+  const results = tc.results || [];
+  const report = tc.report || {};
+  const overall = tc.overallVerdict || report.verdict || 'unverifiable';
+  const label = TEXT_VERDICT_LABEL[overall] || overall;
+
+  // 总体置信度取「最弱一环」：只要有一条关键断言证据不足，整体就不能算高置信
+  const decisive = results.filter((r) =>
+    ['true', 'false', 'partial', 'misleading'].includes(r.verdict)
+  );
+  const conf = decisive.length ? weakestConfidence(decisive) : 'low';
+
+  const sourceCount = (tc.sources || []).length;
+  const groupCount = (tc.groups || []).length;
+
+  $('text-verdict-box').innerHTML = `
+    <div class="text-verdict">
+      <div class="text-verdict-head">
+        <span class="verdict-label">总体判定</span>
+        <strong class="vt-${escapeHtml(overall)}">${escapeHtml(label)}</strong>
+        <span class="conf-tag conf-${escapeHtml(conf)}">置信 ${escapeHtml(CONF_LABEL[conf] || conf)}</span>
+      </div>
+      <div class="text-verdict-meta">
+        拆解 ${results.length} 条断言 · 命中 ${sourceCount} 条来源 · 归为 ${groupCount} 个独立来源组
+      </div>
+      ${report.headline ? `<div class="text-headline">${escapeHtml(report.headline)}</div>` : ''}
+      ${report.summary ? `<div class="text-summary">${escapeHtml(report.summary)}</div>` : ''}
+    </div>`;
+}
+
+function renderTextProcess(tc) {
+  const report = tc.report || {};
+  const src = tc.source || {};
+  const results = tc.results || [];
+  const steps = [];
+
+  // 前四步是程序真实做过的事，不允许被模型改写
+  steps.push(`抽取正文并拆解，识别出 ${results.length} 条可独立核查的断言`);
+  if ((tc.queries || []).length) {
+    steps.push(`使用 ${tc.queries.length} 组检索词联网取证：${tc.queries.join('、')}`);
+  }
+  steps.push(
+    `命中 ${(tc.sources || []).length} 条来源，按主办方与原文文本比对归为 ${
+      (tc.groups || []).length
+    } 个独立来源组`
+  );
+  if (tc.factCheck?.available) {
+    steps.push(`专业核查库：${tc.factCheck.note}`);
+  }
+  // 之后是模型写的叙述部分（已过 URL 白名单）
+  for (const p of report.process || []) steps.push(p);
+
+  $('text-process-box').innerHTML = `
+    <div class="text-sub-head">核查过程</div>
+    <ol class="text-process">${steps.map((s) => `<li>${escapeHtml(s)}</li>`).join('')}</ol>
+    ${
+      src.text
+        ? `<details class="text-source-detail"><summary>查看被核查的原文${
+            src.platform ? `（${escapeHtml(src.platform)}）` : ''
+          }</summary><div class="text-raw">${escapeHtml(src.text)}</div></details>`
+        : ''
+    }`;
+}
+
+function renderTextClaims(tc) {
+  const results = tc.results || [];
+  if (!results.length) {
+    $('text-claims-box').innerHTML =
+      '<p class="muted small">正文里没有识别到可独立核查的断言。</p>';
+    return;
+  }
+
+  const items = results
+    .map((r) => {
+      const label = TEXT_VERDICT_LABEL[r.verdict] || r.verdict;
+      const conf = r.confidence || 'low';
+      const evidence = (r.evidence || [])
+        .map(
+          (e) => `<li>
+            <span class="ev-quote">「${escapeHtml(e.quote || '')}」</span>
+            <span class="ev-stance stance-${escapeHtml(e.stance || 'neutral')}">${escapeHtml(
+              STANCE_LABEL[e.stance] || ''
+            )}</span>
+            <a class="link" target="_blank" rel="noreferrer noopener" href="${escapeHtml(e.url)}">来源 ↗</a>
+          </li>`
+        )
+        .join('');
+
+      return `<div class="text-claim">
+        <div class="text-claim-head">
+          <span class="verdict-tag vt-${escapeHtml(r.verdict)}">${escapeHtml(label)}</span>
+          <span class="conf-tag conf-${escapeHtml(conf)}">置信 ${escapeHtml(CONF_LABEL[conf] || conf)}</span>
+          ${r.forced ? '<span class="forced-tag">规则已校正</span>' : ''}
+        </div>
+        <div class="text-claim-body">${escapeHtml(r.claimText)}</div>
+        <div class="text-claim-meta">${
+          r.queries && r.queries.length ? `检索词：${escapeHtml(r.queries.join('、'))} · ` : ''
+        }${escapeHtml(r.independenceNote || '')}</div>
+        ${r.reasoning ? `<div class="text-claim-reason">${escapeHtml(r.reasoning)}</div>` : ''}
+        ${
+          evidence
+            ? `<div class="text-evidence"><div class="text-sub-head">证据原文</div><ul class="text-ev-list">${evidence}</ul></div>`
+            : ''
+        }
+        ${
+          r.missing && r.missing.length
+            ? `<div class="text-missing">缺失环节：${escapeHtml(r.missing.join('；'))}</div>`
+            : ''
+        }
+      </div>`;
+    })
+    .join('');
+
+  $('text-claims-box').innerHTML =
+    `<div class="text-sub-head">逐条核查（${results.length} 条断言）</div>` + items;
+}
+
+function renderTextSources(tc) {
+  const sources = tc.sources || [];
+  const groups = tc.groups || [];
+  const syndicated = groups.filter((g) => !g.independent);
+
+  let html = `<div class="text-sub-head">检索到的来源（${sources.length} 条 / ${groups.length} 个独立来源组）</div>`;
+
+  if (syndicated.length) {
+    html += `<div class="text-syndication">识别出 ${syndicated.length} 组同源转载（不计为多个独立佐证）：${syndicated
+      .map((g) => escapeHtml((g.hosts || []).join('、')))
+      .join('；')}</div>`;
+  }
+
+  html += `<ul class="text-src-list">${sources
+    .slice(0, 40)
+    .map(
+      (s) => `<li>
+      <a class="link" target="_blank" rel="noreferrer noopener" href="${escapeHtml(s.url)}">${escapeHtml(
+        s.title || s.url
+      )}</a>
+      ${s.snippet ? `<div class="text-src-snip">${escapeHtml(String(s.snippet).slice(0, 180))}</div>` : ''}
+    </li>`
+    )
+    .join('')}</ul>`;
+
+  if (tc.failures && tc.failures.length) {
+    html += `<div class="text-failures">检索异常：${tc.failures
+      .map((f) => escapeHtml(`${f.engine || ''}: ${f.error || ''}`))
+      .join('；')}</div>`;
+  }
+
+  $('text-sources-box').innerHTML = html;
+
+  const blocked = tc.blockedSources || [];
+  if (blocked.length) {
+    $('text-blocked').classList.remove('hidden');
+    $('text-blocked').innerHTML =
+      `<b>已剥离 ${blocked.length} 条不在本次检索结果中的链接（疑似模型幻觉）：</b><br>` +
+      blocked.map((u) => escapeHtml(u)).join('<br>');
+  } else {
+    $('text-blocked').classList.add('hidden');
+  }
+}
+
+/** 取一组断言里最弱的置信度 */
+function weakestConfidence(list) {
+  let weakest = 'high';
+  for (const r of list) {
+    const c = r.confidence || 'low';
+    if ((CONF_ORDER[c] ?? 1) < (CONF_ORDER[weakest] ?? 1)) weakest = c;
+  }
+  return weakest;
 }
 
 function renderVerdict(inv) {
@@ -515,6 +741,26 @@ function bindStaticEvents() {
 
   $('btn-drop').addEventListener('click', () => $('file-input').click());
   $('file-input').addEventListener('change', (e) => handleManualDrop(e.target.files?.[0]));
+
+  $('btn-text-check').addEventListener('click', async () => {
+    const btn = $('btn-text-check');
+    btn.disabled = true;
+    btn.textContent = '核查中…';
+    try {
+      const res = await send({ type: 'text:check-active-tab' });
+      if (res?.ok === false) {
+        setTip('export-tip', res?.error || '无法发起文本核查');
+      }
+    } catch (e) {
+      setTip('export-tip', `发起失败：${e?.message || e}`);
+    } finally {
+      // 核查在后台跑，按钮先恢复；进度由 storage.session 实时回写
+      setTimeout(() => {
+        btn.disabled = false;
+        btn.textContent = '核查当前页面文本';
+      }, 1500);
+    }
+  });
 
   $('btn-copy-clipboard').addEventListener('click', copyCurrentToClipboard);
   $('btn-verify-c2pa').addEventListener('click', runC2paVerification);
