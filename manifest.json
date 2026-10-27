@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "图片溯源与辟谣助手",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "聚合多引擎反向搜图、EXIF/PNG生成参数、C2PA凭证WASM验签与Wayback时间线，辅助事实核查并生成受控辟谣图文。",
   "minimum_chrome_version": "116",
   "permissions": [

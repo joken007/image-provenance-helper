@@ -1,0 +1,50 @@
+# .gitattributes —— 修正 GitHub 的语言统计与 diff 显示
+#
+# 【为什么需要】
+#   GitHub 用 Linguist 统计语言占比。没有 .gitattributes 时，
+#   vendor/ 下的 WASM 与打包产物会被按扩展名猜，
+#   导致仓库页的 Languages 面板严重失真（一度显示 HTML 占 92%，而实际全是 JS）。
+#
+#   规则：
+#     - vendor/ 是 npm install 生成的产物 → 标记为 vendored，不计入语言统计
+#     - docs/ 下的截图 → 标记为 generated，不计入语言统计
+#     - 明确的文本类型 → 强制指定 linguist-language，避免被误判
+#     - 二进制与锁文件 → 标记为 binary，diff 不展开
+
+# ---- vendor：第三方产物，不参与语言统计 ----
+vendor/** linguist-vendored
+vendor/** binary
+
+# ---- 打包与生成产物 ----
+dist/** linguist-generated
+build/** linguist-generated
+*.zip binary
+*.wasm binary
+
+# ---- 文档素材：图片不计入语言统计 ----
+docs/*.png linguist-generated
+docs/*.jpg linguist-generated
+
+# ---- 明确指定语言，避免猜错 ----
+*.js   linguist-language=JavaScript
+*.mjs  linguist-language=JavaScript
+*.css  linguist-language=CSS
+*.html linguist-language=HTML
+*.json linguist-language=JSON
+*.md   linguist-language=Markdown
+*.yml  linguist-language=YAML
+*.yaml linguist-language=YAML
+*.sh   linguist-language=Shell
+*.ps1  linguist-language=PowerShell
+
+# ---- 行尾统一：仓库内用 LF，检出时 Windows 自动转 CRLF ----
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# ---- 二进制文件不做 diff ----
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary

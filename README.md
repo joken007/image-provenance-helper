@@ -88,6 +88,12 @@
 
 ### 1. 安装依赖并 vendor（只需一次）
 
+**方式 A：直接下载 Release（推荐，无需 npm）**
+
+到 [Releases](https://github.com/joken007/image-provenance-helper/releases) 下载 `image-provenance-helper-v1.1.0.zip`，解压后即可加载 —— 里面已含全部依赖（含 8MB C2PA WASM）。
+
+**方式 B：从源码安装**
+
 ```bash
 cd image-provenance-helper
 npm install
@@ -99,6 +105,10 @@ npm install
 | :--- | :--- | :--- |
 | `exifr` | EXIF / IPTC / XMP 解析 | `vendor/exifr.full.esm.mjs` |
 | `@contentauth/c2pa-wasm` | C2PA 内容凭证验签 | `vendor/c2pa.wasm.js` + `vendor/c2pa_bg.wasm` |
+
+> `vendor/` 不入库（8MB 二进制），由 `npm install` 生成。
+> 跑 `npm run verify:vendor` 可校验产物完整性（WASM SHA-512 三方比对）。
+> 自打包用 `npm run release`。
 
 ### 2. 加载扩展
 

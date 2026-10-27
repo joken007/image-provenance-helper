@@ -9,7 +9,10 @@
     "postinstall": "node scripts/vendor.mjs",
     "verify:vendor": "node scripts/verify-vendor.mjs",
     "test": "node --test test/*.test.mjs",
-    "icons": "python scripts/make_icons.py"
+    "icons": "python scripts/make_icons.py",
+    "release": "node scripts/make-release.mjs",
+    "release:check": "node scripts/make-release.mjs --check",
+    "screenshot": "node test/screenshot-text-check.mjs"
   },
   "dependencies": {
     "@contentauth/c2pa-wasm": "^0.4.4",
